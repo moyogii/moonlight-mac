@@ -82,10 +82,29 @@ jobs:
           exit 1
         fi
 
-        codesign --force --deep --sign - app/Moonlight.app
-        
+        # Sign each embedded dylib individually with hardened runtime
+        echo "Signing embedded libraries..."
+        for dylib in app/Moonlight.app/Contents/Frameworks/*.dylib; do
+          if [ -f "$dylib" ]; then
+            echo "Signing: $dylib"
+            codesign --force --options runtime --sign - "$dylib"
+          fi
+        done
+
+        # Sign the main executable with hardened runtime
+        echo "Signing main executable..."
+        codesign --force --options runtime --sign - app/Moonlight.app/Contents/MacOS/Moonlight
+
+        # Sign the app bundle
+        echo "Signing app bundle..."
+        codesign --force --options runtime --sign - app/Moonlight.app
+
+        # Clear quarantine attributes
         xattr -cr app/Moonlight.app
-        codesign --verify --verbose app/Moonlight.app
+
+        # Verify signature
+        echo "Verifying signature..."
+        codesign --verify --verbose=2 app/Moonlight.app
         
     - name: Create DMG
       run: |
