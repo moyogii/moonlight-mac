@@ -19,7 +19,7 @@ This fork was created to learn more about PC streaming and the MacOS operating s
  - Support for passing system-wide keyboard shortcuts like Alt+Tab to the host
  - Automatic enabling and disabling of AWDL (Apple Wireless Direct Link)
  - Game Mode support
- - Built using Jellyfin-FFmpeg for AV1 hardware decoding support (Apple Silicon M3 and above)
+ - AV1 hardware decoding support (Apple Silicon M3 and above)
  - Clipboard Sync (Requires [Apollo](https://github.com/ClassicOldSong/Apollo))
  
 ## Downloads
@@ -31,69 +31,26 @@ This fork was created to learn more about PC streaming and the MacOS operating s
 * Qt 6.9.2 SDK or later (Qt 6.9.2+ required for macOS Tahoe compatibility)
 * Xcode 14 or later (earlier versions may work but are not officially supported)
 * [create-dmg](https://github.com/sindresorhus/create-dmg) (only if building DMGs for use on non-development Macs)
-* Jellyfin-FFmpeg 7.1+ (required - see setup instructions below)
-
-## Jellyfin-FFmpeg Setup
-
-**Important**: This project requires Jellyfin-FFmpeg instead of standard FFmpeg for enhanced codec support and streaming optimizations.
-
-### Quick Setup for macOS
-```bash
-# Install dependencies
-brew install pkg-config qt@6 create-dmg
-
-# Set up jellyfin-ffmpeg development environment
-mkdir -p $HOME/jellyfin/dev/{include,lib/pkgconfig}
-
-# Clone jellyfin-ffmpeg source for headers
-cd $HOME/jellyfin
-git clone --depth 1 --branch v7.1.1-7 https://github.com/jellyfin/jellyfin-ffmpeg.git source
-
-# Copy FFmpeg headers to development directory
-cp -r source/libav* dev/include/
-
-# Create pkg-config file
-cat > dev/lib/pkgconfig/jellyfin-ffmpeg.pc << 'EOF'
-prefix=$HOME/jellyfin/dev
-exec_prefix=${prefix}
-libdir=${exec_prefix}/lib
-includedir=${prefix}/include
-
-Name: jellyfin-ffmpeg
-Description: Jellyfin FFmpeg libraries
-Version: 7.1.1-7
-Requires: 
-Libs: -L${libdir} -lavcodec -lavformat -lavutil -lswscale -lavfilter -lavdevice -lswresample
-Cflags: -I${includedir}
-EOF
-
-# Set environment for builds
-export PKG_CONFIG_PATH="$HOME/jellyfin/dev/lib/pkgconfig:$PKG_CONFIG_PATH"
-```
 
 ### Build Setup Steps
-1. **Set up Jellyfin-FFmpeg** (see instructions above)
-2. Install the latest Qt SDK (and optionally, the Qt Creator IDE) from https://www.qt.io/download
+1. Install the latest Qt SDK (and optionally, the Qt Creator IDE) from https://www.qt.io/download
     * You can install Qt via Homebrew on macOS: `brew install qt@6`
     * You may also use your Linux distro's package manager for the Qt SDK as long as the packages are Qt 5.9 or later.
     * This step is not required for building on Steam Link, because the Steam Link SDK includes Qt 5.14.
-3. Run `git submodule update --init --recursive` from within `moonlight-qt/`
-4. Open the project in Qt Creator or build from qmake on the command line.
+2. Run `git submodule update --init --recursive` from within `moonlight-qt/`
+    * This pulls in all dependencies including FFmpeg, SDL2, and OpenSSL from the `libs` submodule
+3. Open the project in Qt Creator or build from qmake on the command line.
     * To build a binary for use on non-development machines, use the scripts in the `scripts` folder.
         * For macOS builds, the GitHub Actions workflow automatically creates DMG files. For manual DMG creation, use `create-dmg` directly.
     * To build from the command line for development use on macOS or Linux:
         ```bash
-        # Ensure jellyfin-ffmpeg is in PKG_CONFIG_PATH (if using the macOS setup)
-        export PKG_CONFIG_PATH="$HOME/jellyfin/dev/lib/pkgconfig:$PKG_CONFIG_PATH"
-        
-        # Configure and build
         qmake6 moonlight-qt.pro
         make debug  # or 'make release'
         ```
     * **Validation Script**: Use `./scripts/validate-build.sh` to verify your build environment is correctly configured
     * **GitHub Actions**: The project includes automated macOS builds that create distributable DMG files:
         * Builds are triggered on pushes to main/master branches and pull requests
-        * Release builds are automatically attached to GitHub releases  
+        * Release builds are automatically attached to GitHub releases
         * DMG artifacts are available for download from the Actions tab
     * To create an embedded build for a single-purpose device, use `qmake6 "CONFIG+=embedded" moonlight-qt.pro` and build normally.
         * This build will lack windowed mode, Discord/Help links, and other features that don't make sense on an embedded device.
@@ -107,6 +64,5 @@ export PKG_CONFIG_PATH="$HOME/jellyfin/dev/lib/pkgconfig:$PKG_CONFIG_PATH"
 ## Credits
 - [Moonlight](https://github.com/moonlight-stream/moonlight-qt)
 - [Apollo](https://github.com/ClassicOldSong/Apollo)
-- [Jellyfin-FFmpeg](https://github.com/jellyfin/jellyfin-ffmpeg)
 
 Check out the [Moonlight Website](https://moonlight-stream.org) for project links and information.
