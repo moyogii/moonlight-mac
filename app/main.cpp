@@ -13,6 +13,11 @@
 #include <QTemporaryFile>
 #include <QRegularExpression>
 
+#ifdef Q_OS_UNIX
+#include <sys/socket.h>
+#include <signal.h>
+#endif
+
 // Don't let SDL hook our main function, since Qt is already
 // doing the same thing. This needs to be before any headers
 // that might include SDL.h themselves.
@@ -60,9 +65,16 @@
 // Log to console for other platforms
 #endif
 
+// StreamUtils::setAsyncLogging() exposes control of this to the Session
+// class to enable async logging once the stream has started.
+//
+// FIXME: Clean this up
+QAtomicInt g_AsyncLoggingEnabled;
+
 static QElapsedTimer s_LoggerTime;
 static QTextStream s_LoggerStream(stderr);
 static QThreadPool s_LoggerThread;
+static QMutex s_SyncLoggerMutex;
 static bool s_SuppressVerboseOutput;
 static QRegularExpression k_RikeyRegex("&rikey=\\w+");
 static QRegularExpression k_RikeyIdRegex("&rikeyid=[\\d-]+");
@@ -83,6 +95,11 @@ public:
 
     void run() override
     {
+        // QTextStream is not thread-safe, so we must lock. This will generally
+        // only contend in synchronous logging mode or during a transition
+        // between synchronous and asynchronous. Asynchronous won't contend in
+        // the common case because we only have a single logging thread.
+        QMutexLocker locker(&s_SyncLoggerMutex);
         s_LoggerStream << m_Msg;
         s_LoggerStream.flush();
     }
@@ -96,7 +113,7 @@ void logToLoggerStream(QString& message)
 #if defined(QT_DEBUG) && defined(Q_OS_WIN32)
     // Output log messages to a debugger if attached
     if (IsDebuggerPresent()) {
-        static QString lineBuffer;
+        thread_local QString lineBuffer;
         lineBuffer += message;
         if (message.endsWith('\n')) {
             OutputDebugStringW(lineBuffer.toStdWString().c_str());
@@ -115,20 +132,19 @@ void logToLoggerStream(QString& message)
         return;
     }
     else if (oldLogSize >= k_MaxLogSizeBytes - message.size()) {
-        s_LoggerThread.waitForDone();
-        s_LoggerStream << "Log size limit reached!";
-#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
-        s_LoggerStream << Qt::endl;
-#else
-        s_LoggerStream << endl;
-#endif
-        s_LoggerStream.flush();
-        return;
+        // Write one final message
+        message = "Log size limit reached!";
     }
 #endif
 
-    // Queue the log message to be written asynchronously
-    s_LoggerThread.start(new LoggerTask(message));
+    if (g_AsyncLoggingEnabled) {
+        // Queue the log message to be written asynchronously
+        s_LoggerThread.start(new LoggerTask(message));
+    }
+    else {
+        // Log the message immediately
+        LoggerTask(message).run();
+    }
 }
 
 void sdlLogToDiskHandler(void*, int category, SDL_LogPriority priority, const char* message)
@@ -298,8 +314,82 @@ LONG WINAPI UnhandledExceptionHandler(struct _EXCEPTION_POINTERS *ExceptionInfo)
         qCritical() << "Unhandled exception! Failed to open dump file:" << qDmpFileName << "with error" << GetLastError();
     }
 
+    // Sleep for a moment to allow the logging thread to finish up before crashing
+    if (g_AsyncLoggingEnabled) {
+        Sleep(500);
+    }
+
     // Let the program crash and WER collect a dump
     return EXCEPTION_CONTINUE_SEARCH;
+}
+
+#endif
+
+#ifdef Q_OS_UNIX
+
+static int signalFds[2];
+
+void handleSignal(int sig)
+{
+    send(signalFds[0], &sig, sizeof(sig), 0);
+}
+
+int SDLCALL signalHandlerThread(void* data)
+{
+    Q_UNUSED(data);
+
+    int sig;
+    while (recv(signalFds[1], &sig, sizeof(sig), MSG_WAITALL) == sizeof(sig)) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Received signal: %d", sig);
+
+        Session* session;
+        switch (sig) {
+        case SIGINT:
+        case SIGTERM:
+            // Check if we have an active streaming session
+            session = Session::get();
+            if (session != nullptr) {
+                if (sig == SIGTERM) {
+                    // If this is a SIGTERM, set the flag to quit
+                    session->setShouldExit();
+                }
+
+                // Stop the streaming session
+                session->interrupt();
+            }
+            else {
+                // If we're not streaming, we'll close the whole app
+                QCoreApplication::instance()->quit();
+            }
+            break;
+
+        default:
+            Q_UNREACHABLE();
+        }
+    }
+
+    return 0;
+}
+
+void configureSignalHandlers()
+{
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, signalFds) == -1) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                     "socketpair() failed: %d",
+                     errno);
+        return;
+    }
+
+    // Create a thread to handle our signals safely outside of signal context
+    SDL_Thread* thread = SDL_CreateThread(signalHandlerThread, "Signal Handler", nullptr);
+    SDL_DetachThread(thread);
+
+    struct sigaction sa = {};
+    sa.sa_handler = handleSignal;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
 }
 
 #endif
@@ -394,7 +484,7 @@ int main(int argc, char *argv[])
     // Force AntiHooking.dll to be statically imported and loaded
     // by ntdll on Win32 platforms by calling a dummy function.
     AntiHookingDummyImport();
-#elif defined(Q_OS_LINUX)
+#elif defined(APP_IMAGE)
     // Force libssl.so to be directly linked to our binary, so
     // linuxdeployqt can find it and include it in our AppImage.
     // QtNetwork will pull it in via dlopen().
@@ -402,9 +492,9 @@ int main(int argc, char *argv[])
 #endif
 
     // We keep this at function scope to ensure it stays around while we're running,
-    // becaue the Qt QPA will need to read it. Since the temporary file is only
+    // because the Qt QPA will need to read it. Since the temporary file is only
     // created when open() is called, this doesn't do any harm for other platforms.
-    QTemporaryFile eglfsConfigFile("eglfs_override_XXXXXX.conf");
+    QTemporaryFile eglfsConfigFile;
 
     // Avoid using High DPI on EGLFS. It breaks font rendering.
     // https://bugreports.qt.io/browse/QTBUG-64377
@@ -447,6 +537,7 @@ int main(int argc, char *argv[])
                         qInfo() << "Overriding default Qt EGLFS card selection to" << cardOverride;
                         QTextStream(&eglfsConfigFile) << "{ \"device\": \"" << cardOverride << "\" }";
                         qputenv("QT_QPA_EGLFS_KMS_CONFIG", eglfsConfigFile.fileName().toUtf8());
+                        eglfsConfigFile.close();
                     }
                 }
             }
@@ -459,12 +550,27 @@ int main(int argc, char *argv[])
 #endif
     }
 
-#ifndef Q_PROCESSOR_X86
+    bool forceGles;
+    if (!Utils::getEnvironmentVariableOverride("FORCE_QT_GLES", &forceGles)) {
+        forceGles = WMUtils::isRunningNvidiaProprietaryDriverX11() ||
+                    !WMUtils::supportsDesktopGLWithEGL();
+    }
+    if (forceGles) {
+        // The Nvidia proprietary driver causes Qt to render a black window when using
+        // the default Desktop GL profile with EGL. AS a workaround, we default to
+        // OpenGL ES when running on Nvidia on X11.
+        // https://qt-project.atlassian.net/browse/QTBUG-106065
+        QSurfaceFormat fmt;
+        fmt.setRenderableType(QSurfaceFormat::OpenGLES);
+        QSurfaceFormat::setDefaultFormat(fmt);
+    }
+
     // Some ARM and RISC-V embedded devices don't have working GLX which can cause
     // SDL to fail to find a working OpenGL implementation at all. Let's force EGL
-    // on non-x86 platforms, since GLX is deprecated anyway.
+    // on all platforms for both SDL and Qt. This also avoids GLX-EGL interop issues
+    // when trying to use EGL on the main thread after Qt uses GLX.
     SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
-#endif
+    qputenv("QT_XCB_GL_INTEGRATION", "xcb_egl");
 
 #ifdef Q_OS_MACOS
     // This avoids using the default keychain for SSL, which may cause
@@ -591,12 +697,12 @@ int main(int argc, char *argv[])
 
     QGuiApplication app(argc, argv);
 
-#ifndef STEAM_LINK
-    // Force use of the KMSDRM backend for SDL when using Qt platform plugins
-    // that directly draw to the display without a windowing system.
-    if (QGuiApplication::platformName() == "eglfs" || QGuiApplication::platformName() == "linuxfb") {
-        qputenv("SDL_VIDEODRIVER", "kmsdrm");
-    }
+#ifdef Q_OS_UNIX
+    // Register signal handlers to arbitrate between SDL and Qt.
+    // NB: This has to be done after the QGuiApplication is constructed to
+    // ensure Qt has already installed its VT signals before we override
+    // some of them with our own.
+    configureSignalHandlers();
 #endif
 
 #ifdef Q_OS_WIN32
@@ -609,12 +715,22 @@ int main(int argc, char *argv[])
     if (AttachConsole(ATTACH_PARENT_PROCESS)) {
         // If we didn't have an old stdout/stderr handle, use the new CONOUT$ handle
         if (IS_UNSPECIFIED_HANDLE(oldConOut)) {
-            freopen("CONOUT$", "w", stdout);
-            setvbuf(stdout, NULL, _IONBF, 0);
+            FILE* fp;
+            if (freopen_s(&fp, "CONOUT$", "w", stdout) == 0) {
+                setvbuf(fp, NULL, _IONBF, 0);
+            }
+            else {
+                freopen_s(&fp, "NUL", "w", stdout);
+            }
         }
         if (IS_UNSPECIFIED_HANDLE(oldConErr)) {
-            freopen("CONOUT$", "w", stderr);
-            setvbuf(stderr, NULL, _IONBF, 0);
+            FILE* fp;
+            if (freopen_s(&fp, "CONOUT$", "w", stderr) == 0) {
+                setvbuf(fp, NULL, _IONBF, 0);
+            }
+            else {
+                freopen_s(&fp, "NUL", "w", stderr);
+            }
         }
     }
 #endif
@@ -655,15 +771,24 @@ int main(int argc, char *argv[])
 
     // After the QGuiApplication is created, the platform stuff will be initialized
     // and we can set the SDL video driver to match Qt.
-    if (WMUtils::isRunningWayland() && QGuiApplication::platformName() == "xcb") {
-        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
-                    "Detected XWayland. This will probably break hardware decoding! Try running with QT_QPA_PLATFORM=wayland or switch to X11.");
+    if (QGuiApplication::platformName() == "xcb") {
+        if (WMUtils::isRunningWayland()) {
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                        "Detected XWayland. This will probably break hardware decoding! Try running with QT_QPA_PLATFORM=wayland or switch to X11.");
+        }
         qputenv("SDL_VIDEODRIVER", "x11");
     }
     else if (QGuiApplication::platformName().startsWith("wayland")) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Detected Wayland");
         qputenv("SDL_VIDEODRIVER", "wayland");
     }
+#ifndef STEAM_LINK
+    // Force use of the KMSDRM backend for SDL when using Qt platform plugins
+    // that directly draw to the display without a windowing system.
+    else if (QGuiApplication::platformName() == "eglfs" || QGuiApplication::platformName() == "linuxfb") {
+        qputenv("SDL_VIDEODRIVER", "kmsdrm");
+    }
+#endif
 
 #ifdef STEAM_LINK
     // Qt 5.9 from the Steam Link SDK is not able to load any fonts
@@ -699,7 +824,7 @@ int main(int argc, char *argv[])
 #endif
 
     // This is necessary to show our icon correctly on Wayland
-    app.setDesktopFileName("com.moonlight_stream.Moonlight.desktop");
+    app.setDesktopFileName("com.moonlight_stream.Moonlight");
     qputenv("SDL_VIDEO_WAYLAND_WMCLASS", "com.moonlight_stream.Moonlight");
     qputenv("SDL_VIDEO_X11_WMCLASS", "com.moonlight_stream.Moonlight");
 
@@ -748,6 +873,12 @@ int main(int argc, char *argv[])
     }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_VARIANT")) {
         qputenv("QT_QUICK_CONTROLS_MATERIAL_VARIANT", "Dense");
+    }
+    if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_PRIMARY")) {
+        // Qt 6.9 began to use a different shade of Material.Indigo when we use a dark theme
+        // (which is all the time). The new color looks washed out, so manually specify the
+        // old primary color unless the user overrides it themselves.
+        qputenv("QT_QUICK_CONTROLS_MATERIAL_PRIMARY", "#3F51B5");
     }
 
     QQmlApplicationEngine engine;
@@ -801,6 +932,7 @@ int main(int argc, char *argv[])
 
     if (hasGUI) {
         engine.rootContext()->setContextProperty("initialView", initialView);
+        engine.rootContext()->setContextProperty("runConfigChecks", commandLineParserResult == GlobalCommandLineParser::NormalStartRequested);
 
         // Load the main.qml file
         engine.load(QUrl(QStringLiteral("qrc:/gui/main.qml")));
@@ -824,6 +956,9 @@ int main(int argc, char *argv[])
 #ifdef HAVE_FFMPEG
     av_log_set_callback(av_log_default_callback);
 #endif
+
+    // We should not be in async logging mode anymore
+    Q_ASSERT(g_AsyncLoggingEnabled == 0);
 
     // Wait for pending log messages to be printed
     s_LoggerThread.waitForDone();
