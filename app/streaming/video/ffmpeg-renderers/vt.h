@@ -8,6 +8,9 @@ class VTBaseRenderer : public IFFmpegRenderer {
 public:
     VTBaseRenderer(IFFmpegRenderer::RendererType type) : IFFmpegRenderer(type) {}
     bool checkDecoderCapabilities(id<MTLDevice> device, PDECODER_PARAMETERS params);
+
+    // Returns true if running on Apple Silicon (ARM-based Mac)
+    static bool isAppleSilicon();
 };
 #endif
 

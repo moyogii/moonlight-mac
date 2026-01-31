@@ -11,7 +11,7 @@
 #include "streaming/streamutils.h"
 #include "path.h"
 
-// Forward declaration for queue monitoring
+// Forward declaration for queue monitoring (used in fallback backpressure system)
 extern "C" int LiGetPendingVideoFrames(void);
 
 #import <Cocoa/Cocoa.h>
@@ -25,83 +25,17 @@ extern "C" {
     #include <libavutil/pixdesc.h>
 }
 
-struct CscParams
-{
-    vector_float3 matrix[3];
-    vector_float3 offsets;
-};
-
+// ParamBuffer matches the CscParams struct in the Metal shader (FP16 types)
+// Uses __fp16 types that map to Metal's half types
 struct ParamBuffer
 {
-    CscParams cscParams;
-    float bitnessScaleFactor;
-};
-
-static const CscParams k_CscParams_Bt601Lim = {
-    // CSC Matrix
-    {
-        { 1.1644f, 0.0f, 1.5960f },
-        { 1.1644f, -0.3917f, -0.8129f },
-        { 1.1644f, 2.0172f, 0.0f }
-    },
-
-    // Offsets
-    { 16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f },
-};
-static const CscParams k_CscParams_Bt601Full = {
-    // CSC Matrix
-    {
-        { 1.0f, 0.0f, 1.4020f },
-        { 1.0f, -0.3441f, -0.7141f },
-        { 1.0f, 1.7720f, 0.0f },
-    },
-
-    // Offsets
-    { 0.0f, 128.0f / 255.0f, 128.0f / 255.0f },
-};
-static const CscParams k_CscParams_Bt709Lim = {
-    // CSC Matrix
-    {
-        { 1.1644f, 0.0f, 1.7927f },
-        { 1.1644f, -0.2132f, -0.5329f },
-        { 1.1644f, 2.1124f, 0.0f },
-    },
-
-    // Offsets
-    { 16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f },
-};
-static const CscParams k_CscParams_Bt709Full = {
-    // CSC Matrix
-    {
-        { 1.0f, 0.0f, 1.5748f },
-        { 1.0f, -0.1873f, -0.4681f },
-        { 1.0f, 1.8556f, 0.0f },
-    },
-
-    // Offsets
-    { 0.0f, 128.0f / 255.0f, 128.0f / 255.0f },
-};
-static const CscParams k_CscParams_Bt2020Lim = {
-    // CSC Matrix
-    {
-        { 1.1644f, 0.0f, 1.6781f },
-        { 1.1644f, -0.1874f, -0.6505f },
-        { 1.1644f, 2.1418f, 0.0f },
-    },
-
-    // Offsets
-    { 16.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f },
-};
-static const CscParams k_CscParams_Bt2020Full = {
-    // CSC Matrix
-    {
-        { 1.0f, 0.0f, 1.4746f },
-        { 1.0f, -0.1646f, -0.5714f },
-        { 1.0f, 1.8814f, 0.0f },
-    },
-
-    // Offsets
-    { 0.0f, 128.0f / 255.0f, 128.0f / 255.0f },
+    // half3x3 in Metal - stored as 3 packed half3 vectors (6 bytes each = 18 bytes, padded to 24)
+    // We use a 3x4 matrix for proper alignment (Metal aligns half3 to 8 bytes)
+    __fp16 matrix[3][4];  // Row-major 3x3 matrix with padding
+    __fp16 offsets[4];    // half3 with padding (8 bytes)
+    __fp16 chromaOffset[2]; // half2 (4 bytes)
+    __fp16 bitnessScaleFactor;
+    __fp16 _padding;      // Align to 4 bytes
 };
 
 struct Vertex
@@ -112,6 +46,15 @@ struct Vertex
 
 #define MAX_VIDEO_PLANES 3
 
+class VTMetalRenderer;
+
+// CAMetalDisplayLink delegate for display-synchronized rendering (macOS 14+)
+@interface DisplayLinkDelegate : NSObject <CAMetalDisplayLinkDelegate>
+
+- (id)initWithRenderer:(VTMetalRenderer *)renderer;
+
+@end
+
 class VTMetalRenderer : public VTBaseRenderer
 {
 public:
@@ -121,6 +64,10 @@ public:
           m_Window(nullptr),
           m_HwContext(nullptr),
           m_MetalLayer(nullptr),
+          m_MetalDisplayLink(nullptr),
+          m_LatestUnrenderedFrame(nullptr),
+          m_FrameLock(SDL_CreateMutex()),
+          m_FrameReady(SDL_CreateCond()),
           m_TextureCache(nullptr),
           m_CscParamsBuffer(nullptr),
           m_VideoVertexBuffer(nullptr),
@@ -147,7 +94,13 @@ public:
 
     virtual ~VTMetalRenderer() override
     { @autoreleasepool {
-        // Wait for any pending presentations to complete
+        // Stop the display link and free associated state
+        stopDisplayLink();
+        av_frame_free(&m_LatestUnrenderedFrame);
+        SDL_DestroyCond(m_FrameReady);
+        SDL_DestroyMutex(m_FrameLock);
+
+        // Wait for any pending presentations to complete (fallback path)
         if (m_PresentationMutex != nullptr && m_PresentationCond != nullptr) {
             SDL_LockMutex(m_PresentationMutex);
             while (m_PendingPresentationCount > 0) {
@@ -201,12 +154,10 @@ public:
         }
 
         if (m_CommandQueue != nullptr) {
-            // Ensure all pending Metal operations complete before cleanup
             [m_CommandQueue release];
         }
 
         if (m_TextureCache != nullptr) {
-            // Flush any remaining textures before releasing the cache
             CVMetalTextureCacheFlush(m_TextureCache, 0);
             CFRelease(m_TextureCache);
         }
@@ -226,8 +177,14 @@ public:
         m_NextDrawable = nullptr;
     }}
 
+    // Fallback waitToRender for when DisplayLink is not used
     virtual void waitToRender() override
     { @autoreleasepool {
+        // DisplayLink path handles its own drawable acquisition
+        if (hasDisplayLink()) {
+            return;
+        }
+
         if (!m_NextDrawable) {
             // Wait for the next available drawable before latching the frame to render
             m_NextDrawable = [[m_MetalLayer nextDrawable] retain];
@@ -236,15 +193,15 @@ public:
             }
 
             if (m_MetalLayer.displaySyncEnabled) {
-                // Queue overflow prevention for decode pipeline
+                // Fallback backpressure: Queue overflow prevention for decode pipeline
                 int pendingDecodeFrames = LiGetPendingVideoFrames();
-                
+
                 SDL_LockMutex(m_PresentationMutex);
                 int pendingRenderCount = m_PendingPresentationCount;
-                
+
                 bool shouldDrop = false;
                 int waitTimeout = 8;
-                
+
                 if (pendingDecodeFrames > 10) {
                     shouldDrop = true;
                     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -252,20 +209,20 @@ public:
                 } else if (pendingDecodeFrames > 6 && pendingRenderCount > 1) {
                     waitTimeout = 2;
                 }
-                
+
                 if (!shouldDrop && pendingRenderCount > 1) {
                     if (SDL_CondWaitTimeout(m_PresentationCond, m_PresentationMutex, waitTimeout) == SDL_MUTEX_TIMEDOUT) {
                         shouldDrop = true;
                     }
                 }
-                
+
                 if (shouldDrop) {
                     SDL_UnlockMutex(m_PresentationMutex);
                     [m_NextDrawable release];
                     m_NextDrawable = nullptr;
                     return;
                 }
-                
+
                 SDL_UnlockMutex(m_PresentationMutex);
             }
         }
@@ -280,13 +237,7 @@ public:
     bool updateVideoRegionSizeForFrame(AVFrame* frame)
     {
         int drawableWidth, drawableHeight;
-    
-        if (m_LastDrawableWidth > 0 && m_LastDrawableHeight > 0) {
-            drawableWidth = m_LastDrawableWidth;
-            drawableHeight = m_LastDrawableHeight;
-        } else {
-            SDL_Metal_GetDrawableSize(m_Window, &drawableWidth, &drawableHeight);
-        }
+        SDL_Metal_GetDrawableSize(m_Window, &drawableWidth, &drawableHeight);
 
         // Check if anything has changed since the last vertex buffer upload
         if (m_VideoVertexBuffer &&
@@ -294,11 +245,6 @@ public:
                 drawableWidth == m_LastDrawableWidth && drawableHeight == m_LastDrawableHeight) {
             // Nothing to do
             return true;
-        }
-        
-        // Only call SDL when we actually need to update (size might have changed)
-        if (drawableWidth != m_LastDrawableWidth || drawableHeight != m_LastDrawableHeight) {
-            SDL_Metal_GetDrawableSize(m_Window, &drawableWidth, &drawableHeight);
         }
 
         // Determine the correct scaled size for the video region
@@ -324,8 +270,9 @@ public:
         };
 
         if (!m_VideoVertexBuffer) {
-            auto bufferOptions = m_MetalLayer.device.hasUnifiedMemory ? 
-                (MTLCPUCacheModeWriteCombined | MTLResourceStorageModeShared) : 
+            // Use shared storage on Apple Silicon for zero-copy buffer access
+            auto bufferOptions = m_MetalLayer.device.hasUnifiedMemory ?
+                (MTLCPUCacheModeWriteCombined | MTLResourceStorageModeShared) :
                 (MTLCPUCacheModeWriteCombined | MTLResourceStorageModeManaged);
             m_VideoVertexBuffer = [m_MetalLayer.device newBufferWithLength:sizeof(verts) options:bufferOptions];
             if (!m_VideoVertexBuffer) {
@@ -334,10 +281,10 @@ public:
                 return false;
             }
         }
-        
+
         // Update existing buffer contents instead of recreating
         memcpy([m_VideoVertexBuffer contents], verts, sizeof(verts));
-        
+
         // Sync memory for non-unified memory systems
         if (!m_MetalLayer.device.hasUnifiedMemory) {
             [m_VideoVertexBuffer didModifyRange:NSMakeRange(0, sizeof(verts))];
@@ -387,7 +334,10 @@ public:
         bool fullRange = isFrameFullRange(frame);
         if (colorspace != m_LastColorSpace || fullRange != m_LastFullRange) {
             CGColorSpaceRef newColorSpace;
-            ParamBuffer paramBuffer;
+            ParamBuffer paramBuffer = {};
+
+            // Stop the display link before changing the Metal layer
+            stopDisplayLink();
 
             // Free any unpresented drawable since we're changing pixel formats
             discardNextDrawable();
@@ -396,7 +346,6 @@ public:
             case COLORSPACE_REC_709:
                 m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
                 m_MetalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-                paramBuffer.cscParams = (fullRange ? k_CscParams_Bt709Full : k_CscParams_Bt709Lim);
                 break;
             case COLORSPACE_REC_2020:
                 // https://developer.apple.com/documentation/metal/hdr_content/using_color_spaces_to_display_hdr_content
@@ -408,17 +357,49 @@ public:
                     m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2020);
                     m_MetalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
                 }
-                paramBuffer.cscParams = (fullRange ? k_CscParams_Bt2020Full : k_CscParams_Bt2020Lim);
                 break;
             default:
             case COLORSPACE_REC_601:
                 m_MetalLayer.colorspace = newColorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
                 m_MetalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-                paramBuffer.cscParams = (fullRange ? k_CscParams_Bt601Full : k_CscParams_Bt601Lim);
                 break;
             }
 
-            paramBuffer.bitnessScaleFactor = getBitnessScaleFactor(frame);
+            // Use shared CSC matrix functions for accurate color conversion
+            std::array<float, 9> cscMatrix;
+            std::array<float, 3> yuvOffsets;
+            getFramePremultipliedCscConstants(frame, cscMatrix, yuvOffsets);
+
+            // Get chroma co-siting offsets for correct chroma positioning
+            std::array<float, 2> chromaOffsets;
+            getFrameChromaCositingOffsets(frame, chromaOffsets);
+
+            // Fill the ParamBuffer with FP16 values
+            // Matrix is stored row-major: matrix[row][col], with padding in col 3
+            // CSC matrix from renderer.h is column-major, so we transpose
+            paramBuffer.matrix[0][0] = (__fp16)cscMatrix[0]; // R from Y
+            paramBuffer.matrix[0][1] = (__fp16)cscMatrix[3]; // R from U
+            paramBuffer.matrix[0][2] = (__fp16)cscMatrix[6]; // R from V
+            paramBuffer.matrix[0][3] = 0;
+            paramBuffer.matrix[1][0] = (__fp16)cscMatrix[1]; // G from Y
+            paramBuffer.matrix[1][1] = (__fp16)cscMatrix[4]; // G from U
+            paramBuffer.matrix[1][2] = (__fp16)cscMatrix[7]; // G from V
+            paramBuffer.matrix[1][3] = 0;
+            paramBuffer.matrix[2][0] = (__fp16)cscMatrix[2]; // B from Y
+            paramBuffer.matrix[2][1] = (__fp16)cscMatrix[5]; // B from U
+            paramBuffer.matrix[2][2] = (__fp16)cscMatrix[8]; // B from V
+            paramBuffer.matrix[2][3] = 0;
+
+            paramBuffer.offsets[0] = (__fp16)yuvOffsets[0];
+            paramBuffer.offsets[1] = (__fp16)yuvOffsets[1];
+            paramBuffer.offsets[2] = (__fp16)yuvOffsets[2];
+            paramBuffer.offsets[3] = 0;
+
+            paramBuffer.chromaOffset[0] = (__fp16)chromaOffsets[0];
+            paramBuffer.chromaOffset[1] = (__fp16)chromaOffsets[1];
+
+            paramBuffer.bitnessScaleFactor = (__fp16)getBitnessScaleFactor(frame);
+            paramBuffer._padding = 0;
 
             // The CAMetalLayer retains the CGColorSpace
             CGColorSpaceRelease(newColorSpace);
@@ -426,10 +407,11 @@ public:
             // Create the new colorspace parameter buffer for our fragment shader
             [m_CscParamsBuffer release];
 
-            auto bufferOptions = m_MetalLayer.device.hasUnifiedMemory ? 
-                (MTLCPUCacheModeWriteCombined | MTLResourceStorageModeShared) : 
+            // Use shared storage on Apple Silicon for zero-copy buffer access
+            auto bufferOptions = m_MetalLayer.device.hasUnifiedMemory ?
+                (MTLCPUCacheModeWriteCombined | MTLResourceStorageModeShared) :
                 (MTLCPUCacheModeWriteCombined | MTLResourceStorageModeManaged);
-                
+
             m_CscParamsBuffer = [m_MetalLayer.device newBufferWithBytes:(void*)&paramBuffer length:sizeof(paramBuffer) options:bufferOptions];
             if (!m_CscParamsBuffer) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -465,7 +447,7 @@ public:
             pipelineDesc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
             [m_OverlayPipelineState release];
             m_OverlayPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:nullptr];
-            if (!m_VideoPipelineState) {
+            if (!m_OverlayPipelineState) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to create overlay pipeline state");
                 return false;
@@ -523,6 +505,7 @@ public:
                                                                              height:planeHeight
                                                                           mipmapped:NO];
             texDesc.cpuCacheMode = MTLCPUCacheModeWriteCombined;
+            // Use shared storage on Apple Silicon for zero-copy texture access
             texDesc.storageMode = m_MetalLayer.device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
             texDesc.usage = MTLTextureUsageShaderRead;
 
@@ -542,56 +525,9 @@ public:
         return m_SwMappingTextures[planeIndex];
     }
 
-    // Caller frees frame after we return
-    virtual void renderFrame(AVFrame* frame) override
+    // Render a frame into the provided drawable
+    void renderFrameIntoDrawable(AVFrame* frame, id<CAMetalDrawable> drawable)
     { @autoreleasepool {
-        // Apply backpressure to prevent decode queue overflow
-        if (m_MetalLayer.displaySyncEnabled) {
-            SDL_LockMutex(m_PresentationMutex);
-            int pendingRenderCount = m_PendingPresentationCount;
-            SDL_UnlockMutex(m_PresentationMutex);
-            
-            int pendingDecodeFrames = LiGetPendingVideoFrames();
-            int backPressure = 0;
-            
-            if (pendingDecodeFrames > 8) {
-                backPressure += (pendingDecodeFrames - 8) * 5;
-                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                           "Decode queue pressure: %d/15 frames", pendingDecodeFrames);
-            } else if (pendingDecodeFrames > 4) {
-                backPressure += (pendingDecodeFrames - 4) * 2;
-            }
-            
-            if (pendingRenderCount > 1) {
-                backPressure += pendingRenderCount * 2;
-            }
-            
-            if (backPressure > 0) {
-                backPressure = SDL_min(backPressure, 20);
-                SDL_Delay(backPressure);
-            }
-        }
-        if (!updateColorSpaceForFrame(frame)) {
-            // Trigger decoder recreation for unsupported colorspace
-            SDL_Event event;
-            event.type = SDL_RENDER_DEVICE_RESET;
-            SDL_PushEvent(&event);
-            return;
-        }
-
-        if (!updateVideoRegionSizeForFrame(frame)) {
-            // Trigger decoder recreation for size change
-            SDL_Event event;
-            event.type = SDL_RENDER_DEVICE_RESET;
-            SDL_PushEvent(&event);
-            return;
-        }
-
-        // Don't proceed with rendering if we don't have a drawable
-        if (m_NextDrawable == nullptr) {
-            return;
-        }
-
         std::array<CVMetalTextureRef, MAX_VIDEO_PLANES> cvMetalTextures;
         size_t planes = getFramePlaneCount(frame);
         SDL_assert(planes <= MAX_VIDEO_PLANES);
@@ -639,9 +575,9 @@ public:
             }
         }
 
-        // Prepare a render pass to render into the next drawable
+        // Prepare a render pass to render into the drawable
         auto renderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-        renderPassDescriptor.colorAttachments[0].texture = m_NextDrawable.texture;
+        renderPassDescriptor.colorAttachments[0].texture = drawable.texture;
         renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
         renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
         renderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
@@ -717,28 +653,110 @@ public:
 
         [renderEncoder endEncoding];
 
-        // Track pending presentations for pacing BEFORE committing (if display sync enabled)
-        if (m_MetalLayer.displaySyncEnabled) {
-            SDL_LockMutex(m_PresentationMutex);
-            m_PendingPresentationCount++;
-            SDL_UnlockMutex(m_PresentationMutex);
-            
-            // Add presentation completion handler for pacing
-            [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
-                // This handler runs when GPU completes command buffer processing
+        // Flip to the newly rendered buffer
+        [commandBuffer presentDrawable:drawable];
+        [commandBuffer commit];
+
+        // Wait for the command buffer to complete (needed for DisplayLink path to ensure
+        // frames are presented in order and textures are released properly)
+        [commandBuffer waitUntilCompleted];
+    }}
+
+    // Caller frees frame after we return
+    virtual void renderFrame(AVFrame* frame) override
+    { @autoreleasepool {
+        // Handle changes to the frame's colorspace from last time we rendered
+        if (!updateColorSpaceForFrame(frame)) {
+            // Trigger the main thread to recreate the decoder
+            SDL_Event event;
+            event.type = SDL_RENDER_DEVICE_RESET;
+            SDL_PushEvent(&event);
+            return;
+        }
+
+        // Handle changes to the video size or drawable size
+        if (!updateVideoRegionSizeForFrame(frame)) {
+            // Trigger the main thread to recreate the decoder
+            SDL_Event event;
+            event.type = SDL_RENDER_DEVICE_RESET;
+            SDL_PushEvent(&event);
+            return;
+        }
+
+        // Start the display link if necessary
+        startDisplayLink();
+
+        if (hasDisplayLink()) {
+            // DisplayLink path: Move the buffers into a new AVFrame
+            AVFrame* newFrame = av_frame_alloc();
+            av_frame_move_ref(newFrame, frame);
+
+            // Replace any existing unrendered frame with this new one
+            // and signal the CAMetalDisplayLink callback
+            AVFrame* oldFrame = nullptr;
+            SDL_LockMutex(m_FrameLock);
+            if (m_LatestUnrenderedFrame != nullptr) {
+                oldFrame = m_LatestUnrenderedFrame;
+            }
+            m_LatestUnrenderedFrame = newFrame;
+            SDL_UnlockMutex(m_FrameLock);
+            SDL_CondSignal(m_FrameReady);
+
+            av_frame_free(&oldFrame);
+        }
+        else {
+            // Fallback path: Apply backpressure for older macOS or Intel Macs
+            if (m_MetalLayer.displaySyncEnabled) {
+                SDL_LockMutex(m_PresentationMutex);
+                int pendingRenderCount = m_PendingPresentationCount;
+                SDL_UnlockMutex(m_PresentationMutex);
+
+                int pendingDecodeFrames = LiGetPendingVideoFrames();
+                int backPressure = 0;
+
+                if (pendingDecodeFrames > 8) {
+                    backPressure += (pendingDecodeFrames - 8) * 5;
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                               "Decode queue pressure: %d/15 frames", pendingDecodeFrames);
+                } else if (pendingDecodeFrames > 4) {
+                    backPressure += (pendingDecodeFrames - 4) * 2;
+                }
+
+                if (pendingRenderCount > 1) {
+                    backPressure += pendingRenderCount * 2;
+                }
+
+                if (backPressure > 0) {
+                    backPressure = SDL_min(backPressure, 20);
+                    SDL_Delay(backPressure);
+                }
+            }
+
+            // Don't proceed with rendering if we don't have a drawable
+            if (m_NextDrawable == nullptr) {
+                return;
+            }
+
+            // Track pending presentations for pacing BEFORE rendering (if display sync enabled)
+            if (m_MetalLayer.displaySyncEnabled) {
+                SDL_LockMutex(m_PresentationMutex);
+                m_PendingPresentationCount++;
+                SDL_UnlockMutex(m_PresentationMutex);
+            }
+
+            renderFrameIntoDrawable(frame, m_NextDrawable);
+
+            // Signal presentation completion for backpressure pacing
+            if (m_MetalLayer.displaySyncEnabled) {
                 SDL_LockMutex(m_PresentationMutex);
                 m_PendingPresentationCount--;
                 SDL_CondSignal(m_PresentationCond);
                 SDL_UnlockMutex(m_PresentationMutex);
-            }];
+            }
+
+            [m_NextDrawable release];
+            m_NextDrawable = nullptr;
         }
-
-        // Flip to the newly rendered buffer
-        [commandBuffer presentDrawable:m_NextDrawable];
-        [commandBuffer commit];
-
-        [m_NextDrawable release];
-        m_NextDrawable = nullptr;
     }}
 
     id<MTLDevice> getMetalDevice() {
@@ -783,6 +801,7 @@ public:
         int err;
 
         m_Window = params->window;
+        m_FrameRateRange = CAFrameRateRangeMake(params->frameRate, params->frameRate, params->frameRate);
 
         id<MTLDevice> device = getMetalDevice();
         if (!device) {
@@ -790,10 +809,13 @@ public:
             return false;
         }
 
+        // Log device info with Apple Silicon detection
+        bool applesilicon = isAppleSilicon();
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Selected Metal device: %s%s",
+                    "Selected Metal device: %s (Apple Silicon: %s, Unified Memory: %s)",
                     device.name.UTF8String,
-                    device.hasUnifiedMemory ? " (Apple Silicon)" : "");
+                    applesilicon ? "Yes" : "No",
+                    device.hasUnifiedMemory ? "Yes" : "No");
 
         if (m_HwAccel && !checkDecoderCapabilities(device, params)) {
             return false;
@@ -898,6 +920,7 @@ public:
                                                                          height:newSurface->h
                                                                       mipmapped:NO];
         texDesc.cpuCacheMode = MTLCPUCacheModeWriteCombined;
+        // Use shared storage on Apple Silicon for zero-copy texture access
         texDesc.storageMode = m_MetalLayer.device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
         texDesc.usage = MTLTextureUsageShaderRead;
         auto newTexture = [m_MetalLayer.device newTextureWithDescriptor:texDesc];
@@ -928,6 +951,82 @@ public:
                     m_HwAccel ? "hardware" : "software");
 
         return true;
+    }
+
+    void startDisplayLink()
+    {
+        if (@available(macOS 14, *)) {
+            // Only use DisplayLink if:
+            // 1. Not already running
+            // 2. V-Sync is enabled (displaySyncEnabled)
+            // 3. Running on Apple Silicon (Intel causes black flashing on Tahoe)
+            if (m_MetalDisplayLink != nullptr || !m_MetalLayer.displaySyncEnabled || !isAppleSilicon()) {
+                return;
+            }
+
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Starting CAMetalDisplayLink for display-synchronized rendering");
+
+            m_MetalDisplayLink = [[CAMetalDisplayLink alloc] initWithMetalLayer:m_MetalLayer];
+            m_MetalDisplayLink.preferredFrameLatency = 1.0f;
+            m_MetalDisplayLink.preferredFrameRateRange = m_FrameRateRange;
+            m_MetalDisplayLink.delegate = [[DisplayLinkDelegate alloc] initWithRenderer:this];
+            [m_MetalDisplayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        }
+    }
+
+    void stopDisplayLink()
+    {
+        if (@available(macOS 14, *)) {
+            if (m_MetalDisplayLink == nullptr) {
+                return;
+            }
+
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                        "Stopping CAMetalDisplayLink");
+
+            [m_MetalDisplayLink invalidate];
+            m_MetalDisplayLink = nullptr;
+        }
+    }
+
+    bool hasDisplayLink()
+    {
+        if (@available(macOS 14, *)) {
+            if (m_MetalDisplayLink != nullptr) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Called by the DisplayLink delegate when a new drawable is ready
+    void renderLatestFrameOnDrawable(id<CAMetalDrawable> drawable, CFTimeInterval targetTimestamp)
+    {
+        AVFrame* frame = nullptr;
+
+        // Determine how long we can wait depending on how long our CAMetalDisplayLink
+        // says we have until the next frame needs to be rendered. We will wait up to
+        // half the per-frame interval for a new frame to become available.
+        int waitTimeMs = ((targetTimestamp - CACurrentMediaTime()) * 1000) / 2;
+        if (waitTimeMs < 0) {
+            return;
+        }
+
+        // Wait for a new frame to be ready
+        SDL_LockMutex(m_FrameLock);
+        if (m_LatestUnrenderedFrame != nullptr || SDL_CondWaitTimeout(m_FrameReady, m_FrameLock, waitTimeMs) == 0) {
+            frame = m_LatestUnrenderedFrame;
+            m_LatestUnrenderedFrame = nullptr;
+        }
+        SDL_UnlockMutex(m_FrameLock);
+
+        // Render a frame if we got one in time
+        if (frame != nullptr) {
+            renderFrameIntoDrawable(frame, drawable);
+            av_frame_free(&frame);
+        }
     }
 
     int getDecoderColorspace() override
@@ -999,6 +1098,14 @@ private:
     SDL_Window* m_Window;
     AVBufferRef* m_HwContext;
     CAMetalLayer* m_MetalLayer;
+
+    // CAMetalDisplayLink for display-synchronized rendering (macOS 14+, Apple Silicon only)
+    CAMetalDisplayLink* m_MetalDisplayLink API_AVAILABLE(macos(14.0));
+    CAFrameRateRange m_FrameRateRange;
+    AVFrame* m_LatestUnrenderedFrame;
+    SDL_mutex* m_FrameLock;
+    SDL_cond* m_FrameReady;
+
     CVMetalTextureCacheRef m_TextureCache;
     id<MTLBuffer> m_CscParamsBuffer;
     id<MTLBuffer> m_VideoVertexBuffer;
@@ -1008,7 +1115,10 @@ private:
     id<MTLRenderPipelineState> m_OverlayPipelineState;
     id<MTLLibrary> m_ShaderLibrary;
     id<MTLCommandQueue> m_CommandQueue;
+
+    // Fallback drawable for non-DisplayLink path
     id<CAMetalDrawable> m_NextDrawable;
+
     id<MTLTexture> m_SwMappingTextures[MAX_VIDEO_PLANES];
     SDL_MetalView m_MetalView;
     int m_LastColorSpace;
@@ -1017,10 +1127,28 @@ private:
     int m_LastFrameHeight;
     int m_LastDrawableWidth;
     int m_LastDrawableHeight;
+
+    // Fallback backpressure system for older macOS or Intel Macs
     SDL_mutex* m_PresentationMutex;
     SDL_cond* m_PresentationCond;
     int m_PendingPresentationCount;
 };
+
+@implementation DisplayLinkDelegate {
+    VTMetalRenderer* _renderer;
+}
+
+- (id)initWithRenderer:(VTMetalRenderer *)renderer {
+    _renderer = renderer;
+    return self;
+}
+
+- (void)metalDisplayLink:(CAMetalDisplayLink *)link
+             needsUpdate:(CAMetalDisplayLinkUpdate *)update API_AVAILABLE(macos(14.0)) {
+    _renderer->renderLatestFrameOnDrawable(update.drawable, update.targetTimestamp);
+}
+
+@end
 
 IFFmpegRenderer* VTMetalRendererFactory::createRenderer(bool hwAccel) {
     return new VTMetalRenderer(hwAccel);
