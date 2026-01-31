@@ -82,11 +82,13 @@ jobs:
           exit 1
         fi
 
-        # Sign each embedded dylib individually with hardened runtime
+        # Remove existing signatures and re-sign each embedded dylib with hardened runtime
+        # This is required because linker-signed libraries can conflict with ad-hoc runtime signing
         echo "Signing embedded libraries..."
         for dylib in app/Moonlight.app/Contents/Frameworks/*.dylib; do
           if [ -f "$dylib" ]; then
             echo "Signing: $dylib"
+            codesign --remove-signature "$dylib" 2>/dev/null || true
             codesign --force --options runtime --sign - "$dylib"
           fi
         done
@@ -102,9 +104,9 @@ jobs:
         # Clear quarantine attributes
         xattr -cr app/Moonlight.app
 
-        # Verify signature
+        # Verify signature with deep check to catch any library issues
         echo "Verifying signature..."
-        codesign --verify --verbose=2 app/Moonlight.app
+        codesign --verify --deep --strict --verbose=2 app/Moonlight.app
         
     - name: Create DMG
       run: |
