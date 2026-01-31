@@ -1,11 +1,7 @@
 # Moonlight Mac
 
 ## Disclaimer
-This fork was created to learn more about PC streaming and the MacOS operating system to optimize it for my specific setup. Due to this it has a bunch of experimental/in-progress features added that may or may not work for you. If you're looking for a stable experience, you should use the [official Moonlight client](https://github.com/moonlight-stream/moonlight-qt) for Mac.
-
-## About
-
-[Moonlight](https://moonlight-stream.org) is an open source PC client for NVIDIA GameStream and [Sunshine](https://github.com/LizardByte/Sunshine).
+This fork was created solely to learn more about PC streaming and the MacOS operating system to optimize it for my setup. Due to this, it has a bunch of experiental/in-progress features added that may or may not work for you. I recommend using the [official Moonlight client](https://github.com/moonlight-stream/moonlight-qt) for Mac as it's still being updated and will give you the most stable experience.
 
 ## Features
  - Hardware accelerated video decoding on Mac
@@ -20,7 +16,7 @@ This fork was created to learn more about PC streaming and the MacOS operating s
  - Automatic enabling and disabling of AWDL (Apple Wireless Direct Link)
  - Game Mode support
  - AV1 hardware decoding support (Apple Silicon M3 and above)
- - Clipboard Sync (Requires [Apollo](https://github.com/ClassicOldSong/Apollo))
+ - Clipboard Sync (Requires [Apollo](https://github.com/ClassicOldSong/Apollo) or [Vibepollo](https://github.com/Nonary/Vibepollo))
  
 ## Downloads
 - [macOS](https://github.com/moyogii/moonlight-mac/releases)
@@ -57,7 +53,7 @@ This fork was created to learn more about PC streaming and the MacOS operating s
         * For platforms with poor GPU performance, add `"CONFIG+=gpuslow"` to prefer direct KMSDRM rendering over GL/Vulkan renderers. Direct KMSDRM rendering can use dedicated YUV/RGB conversion and scaling hardware rather than slower GPU shaders for these operations.
 
 ## Contribute
-1. Fork us
+1. Fork it
 2. Write code
 3. Send Pull Requests
 
@@ -65,4 +61,4 @@ This fork was created to learn more about PC streaming and the MacOS operating s
 - [Moonlight](https://github.com/moonlight-stream/moonlight-qt)
 - [Apollo](https://github.com/ClassicOldSong/Apollo)
 
-Check out the [Moonlight Website](https://moonlight-stream.org) for project links and information.
+Make sure to check out the [Official Moonlight Website](https://moonlight-stream.org) and support them.
