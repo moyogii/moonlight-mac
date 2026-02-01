@@ -77,36 +77,20 @@ jobs:
         
     - name: Sign application
       run: |
-        if [ ! -d "app/Moonlight.app" ]; then
-          echo "Error: Moonlight.app not found"
-          exit 1
-        fi
+        APP="app/Moonlight.app"
 
-        # Remove existing signatures and re-sign each embedded dylib with hardened runtime
-        # This is required because linker-signed libraries can conflict with ad-hoc runtime signing
-        echo "Signing embedded libraries..."
-        for dylib in app/Moonlight.app/Contents/Frameworks/*.dylib; do
-          if [ -f "$dylib" ]; then
-            echo "Signing: $dylib"
-            codesign --remove-signature "$dylib" 2>/dev/null || true
-            codesign --force --options runtime --sign - "$dylib"
-          fi
-        done
+        # Strip existing signatures from all embedded code (required for linker-signed libs)
+        find "$APP/Contents/Frameworks" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec codesign --remove-signature {} \; 2>/dev/null || true
+        codesign --remove-signature "$APP/Contents/MacOS/Moonlight" 2>/dev/null || true
 
-        # Sign the main executable with hardened runtime
-        echo "Signing main executable..."
-        codesign --force --options runtime --sign - app/Moonlight.app/Contents/MacOS/Moonlight
+        # Sign the entire bundle with --deep to recursively sign all nested code
+        # Note: --options runtime is NOT used because it's incompatible with linker-signed
+        # libraries on macOS 15+ and causes "different Team IDs" errors at runtime
+        codesign --force --deep --sign - "$APP"
+        xattr -cr "$APP"
 
-        # Sign the app bundle
-        echo "Signing app bundle..."
-        codesign --force --options runtime --sign - app/Moonlight.app
-
-        # Clear quarantine attributes
-        xattr -cr app/Moonlight.app
-
-        # Verify signature with deep check to catch any library issues
-        echo "Verifying signature..."
-        codesign --verify --deep --strict --verbose=2 app/Moonlight.app
+        # Verify
+        codesign --verify --deep --strict --verbose=2 "$APP"
         
     - name: Create DMG
       run: |
