@@ -557,7 +557,7 @@ win32 {
     QMAKE_LFLAGS += /MANIFEST:embed /MANIFESTINPUT:$${PWD}/Moonlight.exe.manifest
 }
 macx {
-    QMAKE_MACOSX_DEPLOYMENT_TARGET = 15.0
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 26.0
 
     # Create Info.plist in object dir with the correct version string
     system(cp $$PWD/Info.plist $$OUT_PWD/Info.plist)
