@@ -58,7 +58,16 @@
 #define SER_CLIPBOARDSYNC "clipboardsync"
 #define SER_AWDL_ENABLED "awdlenabled"
 #define SER_AWDL_FIRSTRUN_SHOWN "awdlfirstrunshown"
+#define SER_HOTKEY_TOGGLE_STATS_MODS "hotkeyToggleStatsMods"
+#define SER_HOTKEY_TOGGLE_STATS_SCAN "hotkeyToggleStatsScan"
+#define SER_HOTKEY_EXIT_STREAM_MODS "hotkeyExitStreamMods"
+#define SER_HOTKEY_EXIT_STREAM_SCAN "hotkeyExitStreamScan"
 
+// Default hotkey modifiers: Ctrl+Alt+Shift (SDL KMOD_CTRL|KMOD_ALT|KMOD_SHIFT = 0x0C0|0x300|0x003 = 963)
+#define DEFAULT_HOTKEY_MODIFIERS 0x3C3
+// Default scancodes (SDL values): S=22, E=8
+#define DEFAULT_HOTKEY_TOGGLE_STATS_SCAN 22
+#define DEFAULT_HOTKEY_EXIT_STREAM_SCAN 8
 
 #define CURRENT_DEFAULT_VER 2
 
@@ -188,6 +197,10 @@ void StreamingPreferences::reload()
     language = static_cast<Language>(settings.value(SER_LANGUAGE,
                                                     static_cast<int>(Language::LANG_AUTO)).toInt());
 
+    hotkeyToggleStatsModifiers = settings.value(SER_HOTKEY_TOGGLE_STATS_MODS, DEFAULT_HOTKEY_MODIFIERS).toInt();
+    hotkeyToggleStatsScanCode = settings.value(SER_HOTKEY_TOGGLE_STATS_SCAN, DEFAULT_HOTKEY_TOGGLE_STATS_SCAN).toInt();
+    hotkeyExitStreamModifiers = settings.value(SER_HOTKEY_EXIT_STREAM_MODS, DEFAULT_HOTKEY_MODIFIERS).toInt();
+    hotkeyExitStreamScanCode = settings.value(SER_HOTKEY_EXIT_STREAM_SCAN, DEFAULT_HOTKEY_EXIT_STREAM_SCAN).toInt();
 
     // Perform default settings updates as required based on last default version
     if (defaultVer < 1) {
@@ -380,6 +393,10 @@ void StreamingPreferences::save()
     settings.setValue(SER_CLIPBOARDSYNC, enableClipboardSync);
     settings.setValue(SER_AWDL_ENABLED, awdlEnabled);
     settings.setValue(SER_AWDL_FIRSTRUN_SHOWN, awdlFirstRunShown);
+    settings.setValue(SER_HOTKEY_TOGGLE_STATS_MODS, hotkeyToggleStatsModifiers);
+    settings.setValue(SER_HOTKEY_TOGGLE_STATS_SCAN, hotkeyToggleStatsScanCode);
+    settings.setValue(SER_HOTKEY_EXIT_STREAM_MODS, hotkeyExitStreamModifiers);
+    settings.setValue(SER_HOTKEY_EXIT_STREAM_SCAN, hotkeyExitStreamScanCode);
 }
 
 int StreamingPreferences::getDefaultBitrate(int width, int height, int fps, bool yuv444)
@@ -474,3 +491,55 @@ bool StreamingPreferences::stopAwdlControl()
     return false;
 }
 #endif
+
+QString StreamingPreferences::hotkeyToString(int modifiers, int scanCode)
+{
+    if (scanCode == 0 && modifiers == 0) {
+        return QStringLiteral("None");
+    }
+
+    QString result;
+
+    // SDL KMOD values: KMOD_CTRL=0x00C0, KMOD_ALT=0x0300, KMOD_SHIFT=0x0003, KMOD_GUI=0x0C00
+    if (modifiers & 0x00C0) { // KMOD_CTRL
+        result += QStringLiteral("Ctrl+");
+    }
+    if (modifiers & 0x0300) { // KMOD_ALT
+        result += QStringLiteral("Alt+");
+    }
+    if (modifiers & 0x0003) { // KMOD_SHIFT
+        result += QStringLiteral("Shift+");
+    }
+    if (modifiers & 0x0C00) { // KMOD_GUI
+#ifdef Q_OS_MACOS
+        result += QStringLiteral("Cmd+");
+#else
+        result += QStringLiteral("Super+");
+#endif
+    }
+
+    // SDL scancodes: A=4..Z=29, 1=30..9=38, 0=39, F1=58..F12=69
+    if (scanCode >= 4 && scanCode <= 29) {
+        result += QChar('A' + (scanCode - 4));
+    }
+    else if (scanCode >= 30 && scanCode <= 38) {
+        result += QChar('1' + (scanCode - 30));
+    }
+    else if (scanCode == 39) {
+        result += QChar('0');
+    }
+    else if (scanCode >= 58 && scanCode <= 69) {
+        result += QStringLiteral("F") + QString::number(scanCode - 58 + 1);
+    }
+    else if (scanCode != 0) {
+        result += QStringLiteral("Key ") + QString::number(scanCode);
+    }
+    else {
+        // Modifier-only (strip trailing '+')
+        if (result.endsWith('+')) {
+            result.chop(1);
+        }
+    }
+
+    return result;
+}

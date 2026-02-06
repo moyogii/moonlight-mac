@@ -489,6 +489,24 @@ ApplicationWindow {
         id: awdlFirstRunDialog
     }
 
+    HotkeyCaptureDialog {
+        id: toggleStatsHotkeyCaptureDialog
+        hotkeyName: qsTr("Toggle Performance Overlay")
+        onHotkeyCaptured: {
+            StreamingPreferences.hotkeyToggleStatsModifiers = modifiers
+            StreamingPreferences.hotkeyToggleStatsScanCode = scanCode
+        }
+    }
+
+    HotkeyCaptureDialog {
+        id: exitStreamHotkeyCaptureDialog
+        hotkeyName: qsTr("Exit Stream")
+        onHotkeyCaptured: {
+            StreamingPreferences.hotkeyExitStreamModifiers = modifiers
+            StreamingPreferences.hotkeyExitStreamScanCode = scanCode
+        }
+    }
+
     // This dialog appears when quitting via keyboard or gamepad button
     NavigableMessageDialog {
         id: quitConfirmationDialog

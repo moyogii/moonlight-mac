@@ -150,7 +150,12 @@ public:
     Q_PROPERTY(bool enableClipboardSync MEMBER enableClipboardSync NOTIFY enableClipboardSyncChanged)
     Q_PROPERTY(bool awdlEnabled MEMBER awdlEnabled NOTIFY awdlEnabledChanged)
     Q_PROPERTY(bool awdlFirstRunShown MEMBER awdlFirstRunShown NOTIFY awdlFirstRunShownChanged)
+    Q_PROPERTY(int hotkeyToggleStatsModifiers MEMBER hotkeyToggleStatsModifiers NOTIFY hotkeyToggleStatsChanged)
+    Q_PROPERTY(int hotkeyToggleStatsScanCode MEMBER hotkeyToggleStatsScanCode NOTIFY hotkeyToggleStatsChanged)
+    Q_PROPERTY(int hotkeyExitStreamModifiers MEMBER hotkeyExitStreamModifiers NOTIFY hotkeyExitStreamChanged)
+    Q_PROPERTY(int hotkeyExitStreamScanCode MEMBER hotkeyExitStreamScanCode NOTIFY hotkeyExitStreamChanged)
     Q_INVOKABLE bool retranslate();
+    Q_INVOKABLE static QString hotkeyToString(int modifiers, int scanCode);
     
     // AWDL control methods
     Q_INVOKABLE bool requestAwdlAuthorization();
@@ -195,6 +200,10 @@ public:
     bool enableClipboardSync;
     bool awdlEnabled;
     bool awdlFirstRunShown;
+    int hotkeyToggleStatsModifiers;
+    int hotkeyToggleStatsScanCode;
+    int hotkeyExitStreamModifiers;
+    int hotkeyExitStreamScanCode;
     int packetSize;
     AudioConfig audioConfig;
     VideoCodecConfig videoCodecConfig;
@@ -246,6 +255,9 @@ signals:
     void enableClipboardSyncChanged();
     void awdlEnabledChanged();
     void awdlFirstRunShownChanged();
+
+    void hotkeyToggleStatsChanged();
+    void hotkeyExitStreamChanged();
 
     void awdlAuthorizationChanged(bool hasAuth);
     void awdlError(const QString &error);

@@ -1,5 +1,6 @@
 import QtQuick 2.9
 import QtQuick.Controls 2.2
+import QtQuick.Controls.Material 2.2
 import QtQuick.Layouts 1.2
 import QtQuick.Window 2.2
 
@@ -1793,7 +1794,96 @@ Flickable {
 
             }
         }
+
+        GroupBox {
+            id: hotkeySettingsGroupBox
+            width: (parent.width - (parent.leftPadding + parent.rightPadding))
+            padding: 12
+            title: "<font color=\"skyblue\">" + qsTr("Hotkey Settings") + "</font>"
+            font.pointSize: 12
+
+            Column {
+                anchors.fill: parent
+                spacing: 5
+
+                Label {
+                    width: parent.width
+                    text: qsTr("Customize keyboard shortcuts used during streaming. Changes take effect on the next streaming session.")
+                    font.pointSize: 12
+                    wrapMode: Text.Wrap
+                }
+
+                Row {
+                    width: parent.width
+                    spacing: 10
+
+                    Label {
+                        text: qsTr("Toggle Performance Overlay:")
+                        font.pointSize: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Label {
+                        id: toggleStatsHotkeyDisplay
+                        text: StreamingPreferences.hotkeyToString(StreamingPreferences.hotkeyToggleStatsModifiers,
+                                                                   StreamingPreferences.hotkeyToggleStatsScanCode)
+                        font.pointSize: 12
+                        font.bold: true
+                        color: Material.accent
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Button {
+                        text: qsTr("Change")
+                        onClicked: {
+                            toggleStatsHotkeyCaptureDialog.open()
+                        }
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Row {
+                    width: parent.width
+                    spacing: 10
+
+                    Label {
+                        text: qsTr("Exit Stream:")
+                        font.pointSize: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Label {
+                        id: exitStreamHotkeyDisplay
+                        text: StreamingPreferences.hotkeyToString(StreamingPreferences.hotkeyExitStreamModifiers,
+                                                                   StreamingPreferences.hotkeyExitStreamScanCode)
+                        font.pointSize: 12
+                        font.bold: true
+                        color: Material.accent
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Button {
+                        text: qsTr("Change")
+                        onClicked: {
+                            exitStreamHotkeyCaptureDialog.open()
+                        }
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Button {
+                    text: qsTr("Reset Hotkeys to Defaults")
+                    onClicked: {
+                        // Ctrl+Alt+Shift = 0x3C3 = 963
+                        StreamingPreferences.hotkeyToggleStatsModifiers = 0x3C3
+                        StreamingPreferences.hotkeyToggleStatsScanCode = 22  // SDL_SCANCODE_S
+                        StreamingPreferences.hotkeyExitStreamModifiers = 0x3C3
+                        StreamingPreferences.hotkeyExitStreamScanCode = 8    // SDL_SCANCODE_E
+                    }
+                }
+            }
+        }
     }
-    
-    
+
+
 }

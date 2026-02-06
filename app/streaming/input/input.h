@@ -228,6 +228,7 @@ private:
         KeyCombo keyCombo;
         SDL_Keycode keyCode;
         SDL_Scancode scanCode;
+        Uint16 requiredModifiers;
         bool enabled;
     } m_SpecialKeyCombos[KeyComboMax];
 

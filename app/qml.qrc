@@ -20,5 +20,6 @@
         <file>gui/CenteredGridView.qml</file>
         <file>gui/CliPair.qml</file>
         <file>gui/AwdlFirstRunDialog.qml</file>
+        <file>gui/HotkeyCaptureDialog.qml</file>
     </qresource>
 </RCC>

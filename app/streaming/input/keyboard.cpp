@@ -170,11 +170,21 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         return;
     }
 
-    // Check for our special key combos
-    if ((event->state == SDL_PRESSED) &&
-            (event->keysym.mod & KMOD_CTRL) &&
-            (event->keysym.mod & KMOD_ALT) &&
-            (event->keysym.mod & KMOD_SHIFT)) {
+    // Check for our special key combos.
+    // Each combo has its own requiredModifiers, so we check per-combo.
+    if (event->state == SDL_PRESSED) {
+        // Normalize active modifiers: collapse L/R variants into combined form
+        // KMOD_LSHIFT=0x0001, KMOD_RSHIFT=0x0002, KMOD_SHIFT=0x0003
+        // KMOD_LCTRL=0x0040, KMOD_RCTRL=0x0080, KMOD_CTRL=0x00C0
+        // KMOD_LALT=0x0100, KMOD_RALT=0x0200, KMOD_ALT=0x0300
+        // KMOD_LGUI=0x0400, KMOD_RGUI=0x0800, KMOD_GUI=0x0C00
+        Uint16 activeMods = event->keysym.mod;
+        Uint16 normalizedActive = 0;
+        if (activeMods & KMOD_CTRL)  normalizedActive |= KMOD_CTRL;
+        if (activeMods & KMOD_ALT)   normalizedActive |= KMOD_ALT;
+        if (activeMods & KMOD_SHIFT) normalizedActive |= KMOD_SHIFT;
+        if (activeMods & KMOD_GUI)   normalizedActive |= KMOD_GUI;
+
         // First we test the SDLK combos for matches,
         // that way we ensure that latin keyboard users
         // can match to the key they see on their keyboards.
@@ -187,14 +197,34 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
         // the scancode of another.
 
         for (int i = 0; i < KeyComboMax; i++) {
-            if (m_SpecialKeyCombos[i].enabled && event->keysym.sym == m_SpecialKeyCombos[i].keyCode) {
+            if (!m_SpecialKeyCombos[i].enabled) continue;
+
+            // Normalize required modifiers the same way
+            Uint16 req = m_SpecialKeyCombos[i].requiredModifiers;
+            Uint16 normalizedReq = 0;
+            if (req & KMOD_CTRL)  normalizedReq |= KMOD_CTRL;
+            if (req & KMOD_ALT)   normalizedReq |= KMOD_ALT;
+            if (req & KMOD_SHIFT) normalizedReq |= KMOD_SHIFT;
+            if (req & KMOD_GUI)   normalizedReq |= KMOD_GUI;
+
+            // Exact modifier match: required modifiers present AND no extra modifiers
+            if (normalizedActive == normalizedReq && event->keysym.sym == m_SpecialKeyCombos[i].keyCode) {
                 performSpecialKeyCombo(m_SpecialKeyCombos[i].keyCombo);
                 return;
             }
         }
 
         for (int i = 0; i < KeyComboMax; i++) {
-            if (m_SpecialKeyCombos[i].enabled && event->keysym.scancode == m_SpecialKeyCombos[i].scanCode) {
+            if (!m_SpecialKeyCombos[i].enabled) continue;
+
+            Uint16 req = m_SpecialKeyCombos[i].requiredModifiers;
+            Uint16 normalizedReq = 0;
+            if (req & KMOD_CTRL)  normalizedReq |= KMOD_CTRL;
+            if (req & KMOD_ALT)   normalizedReq |= KMOD_ALT;
+            if (req & KMOD_SHIFT) normalizedReq |= KMOD_SHIFT;
+            if (req & KMOD_GUI)   normalizedReq |= KMOD_GUI;
+
+            if (normalizedActive == normalizedReq && event->keysym.scancode == m_SpecialKeyCombos[i].scanCode) {
                 performSpecialKeyCombo(m_SpecialKeyCombos[i].keyCombo);
                 return;
             }
