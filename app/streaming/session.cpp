@@ -1964,6 +1964,16 @@ void Session::exec()
 
     // Start rich presence to indicate we're in game
     RichPresenceManager presence(*m_Preferences, m_App.name);
+    constexpr Uint32 k_RichPresenceCallbackIntervalMs = 250;
+    Uint32 nextRichPresenceCallbackTick = SDL_GetTicks() + k_RichPresenceCallbackIntervalMs;
+
+    auto runRichPresenceCallbacksIfDue = [&]() {
+        Uint32 now = SDL_GetTicks();
+        if (SDL_TICKS_PASSED(now, nextRichPresenceCallbackTick)) {
+            presence.runCallbacks();
+            nextRichPresenceCallbackTick = now + k_RichPresenceCallbackIntervalMs;
+        }
+    };
 
     // Toggle the stats overlay if requested by the user
     m_OverlayManager.setOverlayState(Overlay::OverlayDebug, m_Preferences->showPerformanceOverlay);
@@ -1985,8 +1995,8 @@ void Session::exec()
         // NB: This behavior was introduced in SDL 2.0.16, but had a few critical
         // issues that could cause indefinite timeouts, delayed joystick detection,
         // and other problems.
-        if (!SDL_WaitEventTimeout(&event, 1000)) {
-            presence.runCallbacks();
+        if (!SDL_WaitEventTimeout(&event, k_RichPresenceCallbackIntervalMs)) {
+            runRichPresenceCallbacksIfDue();
             continue;
         }
 #else
@@ -2002,10 +2012,11 @@ void Session::exec()
             // ARM core in the Steam Link, so we will wait 10 ms instead.
             SDL_Delay(10);
 #endif
-            presence.runCallbacks();
+            runRichPresenceCallbacksIfDue();
             continue;
         }
 #endif
+        runRichPresenceCallbacksIfDue();
         switch (event.type) {
         case SDL_QUIT:
             SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
@@ -2073,8 +2084,6 @@ void Session::exec()
                 m_InputHandler->notifyMouseLeave();
                 break;
             }
-
-            presence.runCallbacks();
 
             // Capture the mouse on SDL_WINDOWEVENT_ENTER if needed
             if (needsFirstEnterCapture && event.window.event == SDL_WINDOWEVENT_ENTER) {
@@ -2261,12 +2270,10 @@ void Session::exec()
 
         case SDL_KEYUP:
         case SDL_KEYDOWN:
-            presence.runCallbacks();
             m_InputHandler->handleKeyEvent(&event.key);
             break;
         case SDL_MOUSEBUTTONDOWN:
         case SDL_MOUSEBUTTONUP:
-            presence.runCallbacks();
             m_InputHandler->handleMouseButtonEvent(&event.button);
             break;
         case SDL_MOUSEMOTION:
@@ -2280,7 +2287,6 @@ void Session::exec()
             break;
         case SDL_CONTROLLERBUTTONDOWN:
         case SDL_CONTROLLERBUTTONUP:
-            presence.runCallbacks();
             m_InputHandler->handleControllerButtonEvent(&event.cbutton);
             break;
 #if SDL_VERSION_ATLEAST(2, 0, 14)
