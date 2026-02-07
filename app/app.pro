@@ -47,9 +47,11 @@ macx {
     CONFIG += ffmpeg
 
     SOURCES += \
+        backend/macosaccent.mm \
         settings/awdlcontroller.cpp
 
     HEADERS += \
+        backend/macosaccent.h \
         settings/awdlcontroller.h
 }
 

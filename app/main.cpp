@@ -572,10 +572,11 @@ int main(int argc, char *argv[])
     // Our icons are styled for a dark theme, so we do not allow the user to override this
     qputenv("QT_QUICK_CONTROLS_MATERIAL_THEME", "Dark");
 
+    // Accent is sourced from macOS system appearance in QML.
+    // Ignore any user-provided Material accent environment override.
+    qunsetenv("QT_QUICK_CONTROLS_MATERIAL_ACCENT");
+
     // These are defaults that we allow the user to override
-    if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_ACCENT")) {
-        qputenv("QT_QUICK_CONTROLS_MATERIAL_ACCENT", "Purple");
-    }
     if (!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_MATERIAL_VARIANT")) {
         qputenv("QT_QUICK_CONTROLS_MATERIAL_VARIANT", "Dense");
     }

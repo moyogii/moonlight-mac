@@ -24,6 +24,7 @@ public:
     Q_PROPERTY(bool hasBrowser MEMBER hasBrowser CONSTANT)
     Q_PROPERTY(bool hasDiscordIntegration MEMBER hasDiscordIntegration CONSTANT)
     Q_PROPERTY(bool usesMaterial3Theme MEMBER usesMaterial3Theme CONSTANT)
+    Q_PROPERTY(QString macOsAccentColor MEMBER macOsAccentColor CONSTANT)
     Q_PROPERTY(QString versionString MEMBER versionString CONSTANT)
 
     // Properties queried asynchronously (startAsyncLoad() must be called!)
@@ -64,6 +65,7 @@ private:
     bool hasDesktopEnvironment;
     bool hasBrowser;
     bool hasDiscordIntegration;
+    QString macOsAccentColor;
     QString versionString;
     bool usesMaterial3Theme;
 
@@ -79,4 +81,3 @@ private:
     QList<QRect> monitorSafeAreaResolutions;
     QList<int> monitorRefreshRates;
 };
-

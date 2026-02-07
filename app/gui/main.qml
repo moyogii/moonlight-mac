@@ -31,6 +31,9 @@ ApplicationWindow {
             Material.background = "#303030"
         }
 
+        // Match the accent color to the user's selected macOS accent.
+        Material.accent = SystemProperties.macOsAccentColor
+
         SdlGamepadKeyNavigation.enable()
     }
 
@@ -234,6 +237,8 @@ ApplicationWindow {
         height: 60
         anchors.topMargin: 5
         anchors.bottomMargin: 5
+        Material.background: "#2c2c2e"
+        Material.foreground: "#f2f2f7"
 
         Label {
             id: titleLabel

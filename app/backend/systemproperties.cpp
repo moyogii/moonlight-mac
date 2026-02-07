@@ -3,6 +3,10 @@
 
 #include <QLibraryInfo>
 
+#ifdef Q_OS_DARWIN
+#include "macosaccent.h"
+#endif
+
 #include "streaming/session.h"
 #include "streaming/streamutils.h"
 
@@ -45,7 +49,12 @@ SystemProperties::SystemProperties()
     isRunningWayland = false;
     isRunningXWayland = false;
     usesMaterial3Theme = QLibraryInfo::version() >= QVersionNumber(6, 5, 0);
+    macOsAccentColor = "#0A84FF";
     QString nativeArch = QSysInfo::currentCpuArchitecture();
+
+#ifdef Q_OS_DARWIN
+    macOsAccentColor = MacOSAppearance::getControlAccentColorHex();
+#endif
 
     isWow64 = false;
 
