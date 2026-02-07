@@ -75,6 +75,7 @@ public:
           m_OverlayTextures{},
           m_OverlayVisibleWidths{},
           m_OverlayLock(0),
+          m_OverlayActive{},
           m_VideoPipelineState(nullptr),
           m_OverlayPipelineState(nullptr),
           m_ShaderLibrary(nullptr),
@@ -88,10 +89,13 @@ public:
           m_LastFrameHeight(-1),
           m_LastDrawableWidth(-1),
           m_LastDrawableHeight(-1),
+          m_VideoFillsDrawable(false),
+          m_InFlightSemaphore(dispatch_semaphore_create(3)),
           m_PresentationMutex(SDL_CreateMutex()),
           m_PresentationCond(SDL_CreateCond()),
           m_PendingPresentationCount(0)
     {
+        SDL_AtomicSet(&m_OverlayActive, 0);
     }
 
     virtual ~VTMetalRenderer() override
@@ -162,6 +166,12 @@ public:
         if (m_CommandQueue != nullptr) {
             [m_CommandQueue release];
         }
+
+#if !OS_OBJECT_USE_OBJC
+        if (m_InFlightSemaphore != nullptr) {
+            dispatch_release(m_InFlightSemaphore);
+        }
+#endif
 
         if (m_TextureCache != nullptr) {
             CVMetalTextureCacheFlush(m_TextureCache, 0);
@@ -262,6 +272,10 @@ public:
         dst.w = drawableWidth;
         dst.h = drawableHeight;
         StreamUtils::scaleSourceToDestinationSurface(&src, &dst);
+
+        // Track whether the video fully covers the drawable for render-pass load action.
+        m_VideoFillsDrawable = (dst.x == 0 && dst.y == 0 &&
+                                dst.w == drawableWidth && dst.h == drawableHeight);
 
         // Convert screen space to normalized device coordinates
         SDL_FRect renderRect;
@@ -534,9 +548,11 @@ public:
     // Render a frame into the provided drawable
     void renderFrameIntoDrawable(AVFrame* frame, id<CAMetalDrawable> drawable)
     { @autoreleasepool {
-        std::array<CVMetalTextureRef, MAX_VIDEO_PLANES> cvMetalTextures;
+        std::array<CVMetalTextureRef, MAX_VIDEO_PLANES> cvMetalTextures = {};
         size_t planes = getFramePlaneCount(frame);
         SDL_assert(planes <= MAX_VIDEO_PLANES);
+
+        const bool isVideoToolboxFrame = (frame->format == AV_PIX_FMT_VIDEOTOOLBOX);
 
         if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
             CVPixelBufferRef pixBuf = reinterpret_cast<CVPixelBufferRef>(frame->data[3]);
@@ -584,24 +600,33 @@ public:
         // Prepare a render pass to render into the drawable
         auto renderPassDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
         renderPassDescriptor.colorAttachments[0].texture = drawable.texture;
-        renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
-        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+        renderPassDescriptor.colorAttachments[0].loadAction = m_VideoFillsDrawable ? MTLLoadActionDontCare : MTLLoadActionClear;
+        if (!m_VideoFillsDrawable) {
+            renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
+        }
         renderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+
+        // Keep frame data alive until GPU work is complete
+        __block AVFrame* completionFrame = av_frame_alloc();
+        if (completionFrame == nullptr || av_frame_ref(completionFrame, frame) < 0) {
+            av_frame_free(&completionFrame);
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                         "Failed to retain frame for asynchronous render completion");
+            return;
+        }
+
+        // Allow a few frames in flight to avoid CPU/GPU serialization
+        dispatch_semaphore_wait(m_InFlightSemaphore, DISPATCH_TIME_FOREVER);
+
         auto commandBuffer = [m_CommandQueue commandBuffer];
         auto renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:renderPassDescriptor];
 
         // Bind textures and buffers then draw the video region
         [renderEncoder setRenderPipelineState:m_VideoPipelineState];
-        if (frame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+        if (isVideoToolboxFrame) {
             for (size_t i = 0; i < planes; i++) {
                 [renderEncoder setFragmentTexture:CVMetalTextureGetTexture(cvMetalTextures[i]) atIndex:i];
             }
-            [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
-                // Free textures after completion of rendering per CVMetalTextureCache requirements
-                for (size_t i = 0; i < planes; i++) {
-                    CFRelease(cvMetalTextures[i]);
-                }
-            }];
         }
         else {
             for (size_t i = 0; i < planes; i++) {
@@ -612,91 +637,109 @@ public:
         [renderEncoder setVertexBuffer:m_VideoVertexBuffer offset:0 atIndex:0];
         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
 
-        // Now draw any overlays that are enabled
-        for (int i = 0; i < Overlay::OverlayMax; i++) {
-            id<MTLTexture> overlayTexture = nullptr;
-            int overlayVisibleWidth = 0;
+        // Now draw any overlays that are enabled.
+        if (SDL_AtomicGet(&m_OverlayActive) != 0) {
+            for (int i = 0; i < Overlay::OverlayMax; i++) {
+                id<MTLTexture> overlayTexture = nullptr;
+                int overlayVisibleWidth = 0;
 
-            // Try to acquire a reference on the overlay texture
-            SDL_AtomicLock(&m_OverlayLock);
-            overlayTexture = [m_OverlayTextures[i] retain];
-            overlayVisibleWidth = m_OverlayVisibleWidths[i];
-            SDL_AtomicUnlock(&m_OverlayLock);
+                // Try to acquire a reference on the overlay texture
+                SDL_AtomicLock(&m_OverlayLock);
+                overlayTexture = [m_OverlayTextures[i] retain];
+                overlayVisibleWidth = m_OverlayVisibleWidths[i];
+                SDL_AtomicUnlock(&m_OverlayLock);
 
-            if (overlayTexture) {
-                SDL_FRect renderRect = {};
-                if (i == Overlay::OverlayStatusUpdate) {
-                    // Bottom Left
-                    renderRect.x = 0;
-                    renderRect.y = 0;
-                }
-                else if (i == Overlay::OverlayDebug) {
-                    // Top left
-                    renderRect.x = 0;
-                    renderRect.y = m_LastDrawableHeight - overlayTexture.height;
-                }
+                if (overlayTexture) {
+                    SDL_FRect renderRect = {};
+                    if (i == Overlay::OverlayStatusUpdate) {
+                        // Bottom Left
+                        renderRect.x = 0;
+                        renderRect.y = 0;
+                    }
+                    else if (i == Overlay::OverlayDebug) {
+                        // Top left
+                        renderRect.x = 0;
+                        renderRect.y = m_LastDrawableHeight - overlayTexture.height;
+                    }
 
-                renderRect.w = overlayTexture.width;
-                renderRect.h = overlayTexture.height;
+                    renderRect.w = overlayTexture.width;
+                    renderRect.h = overlayTexture.height;
 
-                if (i == Overlay::OverlayDebug && m_OverlayBackgroundTexture != nullptr) {
-                    constexpr float k_BackgroundPaddingX = 8.0f;
-                    constexpr float k_BackgroundPaddingY = 4.0f;
-                    int overlayTextWidth = overlayVisibleWidth > 0 ? overlayVisibleWidth : (int)overlayTexture.width;
+                    if (i == Overlay::OverlayDebug && m_OverlayBackgroundTexture != nullptr) {
+                        constexpr float k_BackgroundPaddingX = 8.0f;
+                        constexpr float k_BackgroundPaddingY = 4.0f;
+                        int overlayTextWidth = overlayVisibleWidth > 0 ? overlayVisibleWidth : (int)overlayTexture.width;
 
-                    SDL_FRect backgroundRect = renderRect;
-                    backgroundRect.x = SDL_max(0.0f, backgroundRect.x - k_BackgroundPaddingX);
-                    backgroundRect.y = SDL_max(0.0f, backgroundRect.y - k_BackgroundPaddingY);
-                    backgroundRect.w = SDL_min((float)m_LastDrawableWidth - backgroundRect.x,
-                                                (float)overlayTextWidth + (k_BackgroundPaddingX * 2));
-                    backgroundRect.h = SDL_min((float)m_LastDrawableHeight - backgroundRect.y,
-                                                backgroundRect.h + (k_BackgroundPaddingY * 2));
+                        SDL_FRect backgroundRect = renderRect;
+                        backgroundRect.x = SDL_max(0.0f, backgroundRect.x - k_BackgroundPaddingX);
+                        backgroundRect.y = SDL_max(0.0f, backgroundRect.y - k_BackgroundPaddingY);
+                        backgroundRect.w = SDL_min((float)m_LastDrawableWidth - backgroundRect.x,
+                                                    (float)overlayTextWidth + (k_BackgroundPaddingX * 2));
+                        backgroundRect.h = SDL_min((float)m_LastDrawableHeight - backgroundRect.y,
+                                                    backgroundRect.h + (k_BackgroundPaddingY * 2));
 
-                    StreamUtils::screenSpaceToNormalizedDeviceCoords(&backgroundRect, m_LastDrawableWidth, m_LastDrawableHeight);
+                        StreamUtils::screenSpaceToNormalizedDeviceCoords(&backgroundRect, m_LastDrawableWidth, m_LastDrawableHeight);
 
-                    Vertex bgVerts[] =
+                        Vertex bgVerts[] =
+                        {
+                            { { backgroundRect.x, backgroundRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
+                            { { backgroundRect.x, backgroundRect.y+backgroundRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
+                            { { backgroundRect.x+backgroundRect.w, backgroundRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
+                            { { backgroundRect.x+backgroundRect.w, backgroundRect.y+backgroundRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
+                        };
+
+                        [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
+                        [renderEncoder setFragmentTexture:m_OverlayBackgroundTexture atIndex:0];
+                        [renderEncoder setVertexBytes:bgVerts length:sizeof(bgVerts) atIndex:0];
+                        [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(bgVerts)];
+                    }
+
+                    // Convert screen space to normalized device coordinates
+                    StreamUtils::screenSpaceToNormalizedDeviceCoords(&renderRect, m_LastDrawableWidth, m_LastDrawableHeight);
+
+                    Vertex verts[] =
                     {
-                        { { backgroundRect.x, backgroundRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
-                        { { backgroundRect.x, backgroundRect.y+backgroundRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
-                        { { backgroundRect.x+backgroundRect.w, backgroundRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
-                        { { backgroundRect.x+backgroundRect.w, backgroundRect.y+backgroundRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
+                        { { renderRect.x, renderRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
+                        { { renderRect.x, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
+                        { { renderRect.x+renderRect.w, renderRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
+                        { { renderRect.x+renderRect.w, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
                     };
 
                     [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
-                    [renderEncoder setFragmentTexture:m_OverlayBackgroundTexture atIndex:0];
-                    [renderEncoder setVertexBytes:bgVerts length:sizeof(bgVerts) atIndex:0];
-                    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(bgVerts)];
+                    [renderEncoder setFragmentTexture:overlayTexture atIndex:0];
+                    [renderEncoder setVertexBytes:verts length:sizeof(verts) atIndex:0];
+                    [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(verts)];
+
+                    [overlayTexture release];
                 }
-
-                // Convert screen space to normalized device coordinates
-                StreamUtils::screenSpaceToNormalizedDeviceCoords(&renderRect, m_LastDrawableWidth, m_LastDrawableHeight);
-
-                Vertex verts[] =
-                {
-                    { { renderRect.x, renderRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
-                    { { renderRect.x, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
-                    { { renderRect.x+renderRect.w, renderRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
-                    { { renderRect.x+renderRect.w, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
-                };
-
-                [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
-                [renderEncoder setFragmentTexture:overlayTexture atIndex:0];
-                [renderEncoder setVertexBytes:verts length:sizeof(verts) atIndex:0];
-                [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(verts)];
-
-                [overlayTexture release];
             }
         }
 
         [renderEncoder endEncoding];
 
+        [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
+            if (isVideoToolboxFrame) {
+                for (size_t i = 0; i < planes; i++) {
+                    CFRelease(cvMetalTextures[i]);
+                }
+            }
+
+            av_frame_free(&completionFrame);
+
+            // Track actual presentation completion for fallback backpressure.
+            if (!hasDisplayLink() && m_MetalLayer.displaySyncEnabled) {
+                SDL_LockMutex(m_PresentationMutex);
+                m_PendingPresentationCount--;
+                SDL_CondSignal(m_PresentationCond);
+                SDL_UnlockMutex(m_PresentationMutex);
+            }
+
+            dispatch_semaphore_signal(m_InFlightSemaphore);
+        }];
+
         // Flip to the newly rendered buffer
         [commandBuffer presentDrawable:drawable];
         [commandBuffer commit];
-
-        // Wait for the command buffer to complete (needed for DisplayLink path to ensure
-        // frames are presented in order and textures are released properly)
-        [commandBuffer waitUntilCompleted];
     }}
 
     // Caller frees frame after we return
@@ -782,14 +825,6 @@ public:
             }
 
             renderFrameIntoDrawable(frame, m_NextDrawable);
-
-            // Signal presentation completion for backpressure pacing
-            if (m_MetalLayer.displaySyncEnabled) {
-                SDL_LockMutex(m_PresentationMutex);
-                m_PendingPresentationCount--;
-                SDL_CondSignal(m_PresentationCond);
-                SDL_UnlockMutex(m_PresentationMutex);
-            }
 
             [m_NextDrawable release];
             m_NextDrawable = nullptr;
@@ -989,6 +1024,16 @@ public:
 
         // If the overlay is disabled, we're done
         if (!overlayEnabled) {
+            int activeOverlays = 0;
+            SDL_AtomicLock(&m_OverlayLock);
+            for (int i = 0; i < Overlay::OverlayMax; i++) {
+                if (m_OverlayTextures[i] != nullptr) {
+                    activeOverlays++;
+                }
+            }
+            SDL_AtomicSet(&m_OverlayActive, activeOverlays);
+            SDL_AtomicUnlock(&m_OverlayLock);
+
             SDL_FreeSurface(newSurface);
             return;
         }
@@ -1019,6 +1064,15 @@ public:
         SDL_AtomicLock(&m_OverlayLock);
         m_OverlayTextures[type] = newTexture;
         m_OverlayVisibleWidths[type] = overlayVisibleWidth;
+
+        int activeOverlays = 0;
+        for (int i = 0; i < Overlay::OverlayMax; i++) {
+            if (m_OverlayTextures[i] != nullptr) {
+                activeOverlays++;
+            }
+        }
+        SDL_AtomicSet(&m_OverlayActive, activeOverlays);
+
         SDL_AtomicUnlock(&m_OverlayLock);
     }}
 
@@ -1195,6 +1249,7 @@ private:
     id<MTLTexture> m_OverlayTextures[Overlay::OverlayMax];
     int m_OverlayVisibleWidths[Overlay::OverlayMax];
     SDL_SpinLock m_OverlayLock;
+    SDL_atomic_t m_OverlayActive;
     id<MTLRenderPipelineState> m_VideoPipelineState;
     id<MTLRenderPipelineState> m_OverlayPipelineState;
     id<MTLLibrary> m_ShaderLibrary;
@@ -1211,6 +1266,8 @@ private:
     int m_LastFrameHeight;
     int m_LastDrawableWidth;
     int m_LastDrawableHeight;
+    bool m_VideoFillsDrawable;
+    dispatch_semaphore_t m_InFlightSemaphore;
 
     // Fallback backpressure system for older macOS or Intel Macs
     SDL_mutex* m_PresentationMutex;
