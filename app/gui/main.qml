@@ -52,10 +52,6 @@ ApplicationWindow {
 
         // Display any modal dialogs for configuration warnings
         if (runConfigChecks) {
-            if (SystemProperties.isWow64) {
-                wow64Dialog.open()
-            }
-
             // Show AWDL first-run dialog on macOS if not shown before
             if (Qt.platform.os === "osx" && !StreamingPreferences.awdlFirstRunShown) {
                 awdlFirstRunDialog.open()
@@ -70,12 +66,7 @@ ApplicationWindow {
 
     function hasHardwareAccelerationChanged() {
         if (!SystemProperties.hasHardwareAcceleration && StreamingPreferences.videoDecoderSelection !== StreamingPreferences.VDS_FORCE_SOFTWARE) {
-            if (SystemProperties.isRunningXWayland) {
-                xWaylandDialog.open()
-            }
-            else {
-                noHwDecoderDialog.open()
-            }
+            noHwDecoderDialog.open()
         }
     }
 
@@ -457,23 +448,6 @@ ApplicationWindow {
                    "Your streaming performance may be severely degraded in this configuration.")
         helpText: qsTr("Click the Help button for more information on solving this problem.")
         helpUrl: "https://github.com/moonlight-stream/moonlight-docs/wiki/Fixing-Hardware-Decoding-Problems"
-    }
-
-    ErrorMessageDialog {
-        id: xWaylandDialog
-        text: qsTr("Hardware acceleration doesn't work on XWayland. Continuing on XWayland may result in poor streaming performance. " +
-                   "Try running with QT_QPA_PLATFORM=wayland or switch to X11.")
-        helpText: qsTr("Click the Help button for more information.")
-        helpUrl: "https://github.com/moonlight-stream/moonlight-docs/wiki/Fixing-Hardware-Decoding-Problems"
-    }
-
-    NavigableMessageDialog {
-        id: wow64Dialog
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        text: qsTr("This version of Moonlight isn't optimized for your PC. Please download the '%1' version of Moonlight for the best streaming performance.").arg(SystemProperties.friendlyNativeArchName)
-        onAccepted: {
-            Qt.openUrlExternally("https://github.com/moonlight-stream/moonlight-qt/releases");
-        }
     }
 
     ErrorMessageDialog {

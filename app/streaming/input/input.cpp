@@ -253,8 +253,7 @@ SdlInputHandler::~SdlInputHandler()
 #ifdef STEAM_LINK
     // Hide SDL's cursor on Steam Link after quitting the stream.
     // FIXME: We should also do this for other situations where SDL
-    // and Qt will draw their own mouse cursors like KMSDRM or RPi
-    // video backends.
+    // and Qt both draw their own cursors.
     SDL_ShowCursor(SDL_DISABLE);
 #endif
 }
@@ -283,12 +282,8 @@ void SdlInputHandler::raiseAllKeys()
 
 void SdlInputHandler::notifyMouseLeave()
 {
-    // SDL on Windows doesn't send the mouse button up until the mouse re-enters the window
-    // after leaving it. This breaks some of the Aero snap gestures, so we'll capture it to
-    // allow us to receive the mouse button up events later.
-    //
-    // On macOS and X11, capturing the mouse allows us to receive mouse motion outside the
-    // window (button up already worked without capture).
+    // Capture the mouse while buttons are held so we still receive release/motion events
+    // after the cursor leaves the window in absolute mode.
     if (m_AbsoluteMouseMode && isCaptureActive()) {
         // NB: Not using SDL_GetGlobalMouseState() because we want our state not the system's
         Uint32 mouseState = SDL_GetMouseState(nullptr, nullptr);
@@ -315,20 +310,10 @@ void SdlInputHandler::notifyFocusLost()
     // used in shortcuts that cause focus loss (such as Alt+Tab) may get stuck down.
     raiseAllKeys();
 
-#ifdef Q_OS_WIN32
-    // Re-enable text input when window loses focus as a workaround for an SDL bug.
-    // See #1617 for details.
-    SDL_StartTextInput();
-#endif
 }
 
 void SdlInputHandler::notifyFocusGained()
 {
-#ifdef Q_OS_WIN32
-    // Disable text input when window gains focus to prevent IME popup interference.
-    // See #1617 for details.
-    SDL_StopTextInput();
-#endif
 }
 
 bool SdlInputHandler::isCaptureActive()
@@ -355,12 +340,8 @@ void SdlInputHandler::updateKeyboardGrabState()
         shouldGrab = false;
     }
 
-    // Don't close the window on Alt+F4 when keyboard grab is enabled
-    SDL_SetHint(SDL_HINT_WINDOWS_NO_CLOSE_ON_ALT_F4, shouldGrab ? "1" : "0");
-
 #if SDL_VERSION_ATLEAST(2, 0, 15)
-    // On SDL 2.0.15+, we can get keyboard-only grab on Win32, X11, and Wayland.
-    // SDL 2.0.18 adds keyboard grab on macOS (if built with non-AppStore APIs).
+    // On SDL 2.0.15+, we can get keyboard-only grab.
     SDL_SetWindowKeyboardGrab(m_Window, shouldGrab ? SDL_TRUE : SDL_FALSE);
 #endif
 }

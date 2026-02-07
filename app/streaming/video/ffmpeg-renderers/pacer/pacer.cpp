@@ -1,16 +1,6 @@
 #include "pacer.h"
 #include "streaming/streamutils.h"
 
-#ifdef Q_OS_WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
-#include "dxvsyncsource.h"
-#endif
-
-#ifdef HAS_WAYLAND
-#include "waylandvsyncsource.h"
-#endif
-
 #include <SDL_syswm.h>
 
 // Limit the number of queued frames to prevent excessive memory consumption
@@ -279,24 +269,9 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps, bool enablePacing)
             return false;
         }
 
-        switch (info.subsystem) {
-    #ifdef Q_OS_WIN32
-        case SDL_SYSWM_WINDOWS:
-            m_VsyncSource = new DxVsyncSource(this);
-            break;
-    #endif
-
-    #if defined(SDL_VIDEO_DRIVER_WAYLAND) && defined(HAS_WAYLAND)
-        case SDL_SYSWM_WAYLAND:
-            m_VsyncSource = new WaylandVsyncSource(this);
-            break;
-    #endif
-
-        default:
-            // Platforms without a VsyncSource will just render frames
-            // immediately like they used to.
-            break;
-        }
+        // Platforms without a dedicated VsyncSource will just render frames
+        // immediately like they used to.
+        Q_UNUSED(info);
 
         SDL_assert(m_VsyncSource != nullptr || !(m_RendererAttributes & RENDERER_ATTRIBUTE_FORCE_PACING));
 

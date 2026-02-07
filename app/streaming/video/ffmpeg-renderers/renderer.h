@@ -10,10 +10,6 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/pixdesc.h>
-
-#ifdef HAVE_DRM
-#include <libavutil/hwcontext_drm.h>
-#endif
 }
 
 #ifndef FOURCC_FMT
@@ -141,16 +137,8 @@ class IFFmpegRenderer : public Overlay::IOverlayRenderer {
 public:
     enum class RendererType {
         Unknown,
-        Vulkan,
-        CUDA,
-        D3D11VA,
-        DRM,
-        DXVA2,
         EGL,
-        MMAL,
         SDL,
-        VAAPI,
-        VDPAU,
         VTSampleLayer,
         VTMetal,
     };
@@ -310,26 +298,10 @@ public:
         default:
         case RendererType::Unknown:
             return "Unknown";
-        case RendererType::Vulkan:
-            return "Vulkan (libplacebo)";
-        case RendererType::CUDA:
-            return "CUDA";
-        case RendererType::D3D11VA:
-            return "D3D11VA";
-        case RendererType::DRM:
-            return "DRM";
-        case RendererType::DXVA2:
-            return "DXVA2 (D3D9)";
         case RendererType::EGL:
             return "EGL/GLES";
-        case RendererType::MMAL:
-            return "MMAL";
         case RendererType::SDL:
             return "SDL";
-        case RendererType::VAAPI:
-            return "VAAPI";
-        case RendererType::VDPAU:
-            return "VDPAU";
         case RendererType::VTSampleLayer:
             return "VideoToolbox (AVSampleBufferDisplayLayer)";
         case RendererType::VTMetal:
@@ -511,17 +483,6 @@ public:
                                     EGLDisplay,
                                     EGLImage[EGL_MAX_PLANES]) {
         return -1;
-    }
-#endif
-
-#ifdef HAVE_DRM
-    // By default we can't do DRM PRIME export
-    virtual bool canExportDrmPrime() {
-        return false;
-    }
-
-    virtual bool mapDrmPrimeFrame(AVFrame*, AVDRMFrameDescriptor*) {
-        return false;
     }
 #endif
 

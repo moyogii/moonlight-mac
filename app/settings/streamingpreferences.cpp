@@ -132,19 +132,7 @@ void StreamingPreferences::reload()
 
     int defaultVer = settings.value(SER_DEFAULTVER, 0).toInt();
 
-#ifdef Q_OS_DARWIN
     recommendedFullScreenMode = WindowMode::WM_FULLSCREEN_DESKTOP;
-#else
-    // Wayland doesn't support modesetting, so use fullscreen desktop mode
-    // unless we have a slow GPU (which can take advantage of wp_viewporter
-    // to reduce GPU load with lower resolution video streams).
-    if (WMUtils::isRunningWayland() && !WMUtils::isGpuSlow()) {
-        recommendedFullScreenMode = WindowMode::WM_FULLSCREEN_DESKTOP;
-    }
-    else {
-        recommendedFullScreenMode = WindowMode::WM_FULLSCREEN;
-    }
-#endif
 
     width = settings.value(SER_WIDTH, 1280).toInt();
     height = settings.value(SER_HEIGHT, 720).toInt();
@@ -211,12 +199,6 @@ void StreamingPreferences::reload()
         }
 #endif
     }
-    if (defaultVer < 2) {
-        if (windowMode == WindowMode::WM_FULLSCREEN && WMUtils::isRunningWayland()) {
-            windowMode = WindowMode::WM_FULLSCREEN_DESKTOP;
-        }
-    }
-
     // Fixup VCC value to the new settings format with codec and HDR separate
     if (videoCodecConfig == VCC_FORCE_HEVC_HDR_DEPRECATED) {
         videoCodecConfig = VCC_AUTO;
@@ -511,11 +493,7 @@ QString StreamingPreferences::hotkeyToString(int modifiers, int scanCode)
         result += QStringLiteral("Shift+");
     }
     if (modifiers & 0x0C00) { // KMOD_GUI
-#ifdef Q_OS_MACOS
         result += QStringLiteral("Cmd+");
-#else
-        result += QStringLiteral("Super+");
-#endif
     }
 
     // SDL scancodes: A=4..Z=29, 1=30..9=38, 0=39, F1=58..F12=69

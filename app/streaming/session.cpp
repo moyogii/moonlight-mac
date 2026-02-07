@@ -16,12 +16,7 @@
 #include "video/slvid.h"
 #endif
 
-#ifdef Q_OS_WIN32
-// Scaling the icon down on Win32 looks dreadful, so render at lower res
-#define ICON_SIZE 32
-#else
 #define ICON_SIZE 64
-#endif
 
 #define SDL_CODE_FLUSH_WINDOW_EVENT_BARRIER 100
 #define SDL_CODE_GAMECONTROLLER_RUMBLE 101
@@ -350,8 +345,7 @@ int Session::drSetup(int videoFormat, int width, int height, int frameRate, void
     s_ActiveSession->m_ActiveVideoFrameRate = frameRate;
 
     // Defer decoder setup until we've started streaming so we
-    // don't have to hide and show the SDL window (which seems to
-    // cause pointer hiding to break on Windows).
+    // don't have to hide and show the SDL window.
 
     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Video stream is %dx%dx%d (format 0x%x)",
                 width, height, frameRate, videoFormat);
@@ -364,7 +358,7 @@ int Session::drSubmitDecodeUnit(PDECODE_UNIT du)
     // Use a lock since we'll be yanking this decoder out
     // from underneath the session when we initiate destruction.
     // We need to destroy the decoder on the main thread to satisfy
-    // some API constraints (like DXVA2). If we can't acquire it,
+    // API constraints in some render paths. If we can't acquire it,
     // that means the decoder is about to be destroyed, so we can
     // safely return DR_OK and wait for the IDR frame request by
     // the decoder reinitialization code.
@@ -803,31 +797,10 @@ bool Session::initialize(QQuickWindow* qtWindow)
             }
         }
 #else
-        // Deprioritize AV1 unless we can't hardware decode HEVC, and have HDR enabled
-        // or we're on Windows or a non-x86 Linux/BSD.
-        //
-        // Normally, we'd assume hardware that can't decode HEVC definitely can't decode
-        // AV1 either, and we wouldn't even bother probing for AV1 support. However, some
-        // Windows business systems have HEVC support disabled in firmware from the factory,
-        // yet they can still decode AV1 in hardware. To avoid falling back to H.264 on
-        // these systems, we don't deprioritize AV1. This firmware-based HEVC licensing
-        // behavior seems to be unique to Windows, and Linux on the same system is able
-        // to decode HEVC in hardware normally using VAAPI.
-        // https://www.reddit.com/r/GeForceNOW/comments/1omsckt/psa_be_wary_of_purchasing_dell_computers_with/
-        //
-        // Some embedded Linux platforms have incomplete V4L2 decoding support which can
-        // lead to unusual cases where a system might support H.264 and AV1 but not HEVC,
-        // even if the underlying hardware supports all three. RK3588 is an example of
-        // such a SoC. To handle this situation, we will also probe for AV1 if we're on
-        // a non-x86 non-macOS UNIX system.
-        //
+        // Deprioritize AV1 unless we can't hardware decode HEVC and HDR is enabled.
         // We want to keep AV1 at the top of the list for HDR with software decoding
         // because dav1d is higher performance than FFmpeg's HEVC software decoder.
-        if (hevcDA == DecoderAvailability::Hardware
-#if !defined(Q_OS_WIN32) && (!(defined(Q_OS_UNIX) && !defined(Q_OS_DARWIN)) || defined(Q_PROCESSOR_X86))
-            || !m_Preferences->enableHdr
-#endif
-            ) {
+        if (hevcDA == DecoderAvailability::Hardware || !m_Preferences->enableHdr) {
             m_SupportedVideoFormats.deprioritizeByMask(VIDEO_FORMAT_MASK_AV1);
         }
 #endif
@@ -911,24 +884,9 @@ bool Session::initialize(QQuickWindow* qtWindow)
         }
         // Fall-through
     case StreamingPreferences::WM_FULLSCREEN:
-#ifdef Q_OS_DARWIN
         m_FullScreenFlag = SDL_WINDOW_FULLSCREEN_DESKTOP;
-#else
-        m_FullScreenFlag = SDL_WINDOW_FULLSCREEN;
-#endif
         break;
     }
-
-#if !SDL_VERSION_ATLEAST(2, 0, 11)
-    // HACK: Using a full-screen window breaks mouse capture on the Pi's LXDE
-    // GUI environment. Force the session to use windowed mode (which won't
-    // really matter anyway because the MMAL renderer always draws full-screen).
-    if (qgetenv("DESKTOP_SESSION") == "LXDE-pi") {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "Forcing windowed mode on LXDE-Pi");
-        m_FullScreenFlag = 0;
-    }
-#endif
 
     // Check for validation errors/warnings and emit
     // signals for them, if appropriate
@@ -1427,12 +1385,9 @@ void Session::updateOptimalWindowDisplayMode()
     // On devices with slow GPUs, we will try to match the display mode
     // to the video stream to offload the scaling work to the display.
     //
-    // We also try to match the video resolution if we're using KMSDRM,
-    // because scaling on the display is generally higher quality than
-    // scaling performed by drmModeSetPlane().
     bool matchVideo;
     if (!Utils::getEnvironmentVariableOverride("MATCH_DISPLAY_MODE_TO_VIDEO", &matchVideo)) {
-        matchVideo = WMUtils::isGpuSlow() || QString(SDL_GetCurrentVideoDriver()) == "KMSDRM";
+        matchVideo = WMUtils::isGpuSlow();
     }
 
     bestMode = desktopMode;
@@ -1506,12 +1461,6 @@ void Session::toggleFullscreen()
 {
     bool fullScreen = !(SDL_GetWindowFlags(m_Window) & m_FullScreenFlag);
 
-#if defined(Q_OS_WIN32) || defined(Q_OS_DARWIN)
-    // Destroy the video decoder before toggling full-screen because D3D9 can try
-    // to put the window back into full-screen before we've managed to destroy
-    // the renderer. This leads to excessive flickering and can cause the window
-    // decorations to get messed up as SDL and D3D9 fight over the window style.
-    //
     // On Apple Silicon Macs, the AVSampleBufferDisplayLayer may cause WindowServer
     // to deadlock when transitioning out of fullscreen. Destroy the decoder before
     // exiting fullscreen as a workaround. See issue #973.
@@ -1519,7 +1468,6 @@ void Session::toggleFullscreen()
     delete m_VideoDecoder;
     m_VideoDecoder = nullptr;
     SDL_UnlockMutex(m_DecoderLock);
-#endif
 
     // Actually enter/leave fullscreen
     SDL_SetWindowFullscreen(m_Window, fullScreen ? m_FullScreenFlag : 0);
@@ -1904,8 +1852,7 @@ void Session::exec()
 #ifndef Q_OS_DARWIN
     // Other platforms seem to preserve our Qt icon when creating a new window.
     if (iconSurface != nullptr) {
-        // This must be called before entering full-screen mode on Windows
-        // or our icon will not persist when toggling to windowed mode
+        // Set the icon before fullscreen transitions.
         SDL_SetWindowIcon(m_Window, iconSurface);
     }
 #endif
@@ -1920,20 +1867,7 @@ void Session::exec()
     }
 
     bool needsFirstEnterCapture = false;
-    bool needsPostDecoderCreationCapture = false;
-
-    // HACK: For Wayland, we wait until we get the first SDL_WINDOWEVENT_ENTER
-    // event where it seems to work consistently on GNOME. For other platforms,
-    // especially where SDL may call SDL_RecreateWindow(), we must only capture
-    // after the decoder is created.
-    if (strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0) {
-        // Native Wayland: Capture on SDL_WINDOWEVENT_ENTER
-        needsFirstEnterCapture = true;
-    }
-    else {
-        // X11/XWayland: Capture after decoder creation
-        needsPostDecoderCreationCapture = true;
-    }
+    bool needsPostDecoderCreationCapture = true;
 
     // Stop text input. SDL enables it by default
     // when we initialize the video subsystem, but this
@@ -1951,8 +1885,7 @@ void Session::exec()
         QGuiApplication::setOverrideCursor(QCursor(Qt::BlankCursor));
     }
 
-    // Set timer resolution to 1 ms on Windows for greater
-    // sleep precision and more accurate callback timing.
+    // Set timer resolution to 1 ms for greater sleep precision.
     SDL_SetHint(SDL_HINT_TIMER_RESOLUTION, "1");
 
     int currentDisplayIndex = SDL_GetWindowDisplayIndex(m_Window);
@@ -1986,9 +1919,8 @@ void Session::exec()
     SDL_Event event;
     for (;;) {
 #if SDL_VERSION_ATLEAST(2, 0, 18) && !defined(STEAM_LINK)
-        // SDL 2.0.18 has a proper wait event implementation that uses platform
-        // support to block on events rather than polling on Windows, macOS, X11,
-        // and Wayland. It will fall back to 1 ms polling if a joystick is
+        // SDL 2.0.18 has a proper wait event implementation and falls back to
+        // 1 ms polling if a joystick is
         // connected, so we don't use it for STEAM_LINK to ensure we only poll
         // every 10 ms.
         //
@@ -2092,8 +2024,7 @@ void Session::exec()
             }
 
             // We want to recreate the decoder for resizes (full-screen toggles) and the initial shown event.
-            // We use SDL_WINDOWEVENT_SIZE_CHANGED rather than SDL_WINDOWEVENT_RESIZED because the latter doesn't
-            // seem to fire when switching from windowed to full-screen on X11.
+            // We use SDL_WINDOWEVENT_SIZE_CHANGED rather than SDL_WINDOWEVENT_RESIZED for reliable fullscreen transitions.
             if (event.window.event != SDL_WINDOWEVENT_SIZE_CHANGED &&
                 (event.window.event != SDL_WINDOWEVENT_SHOWN || m_VideoDecoder != nullptr)) {
                 // Check that the window display hasn't changed. If it has, we want
@@ -2111,15 +2042,10 @@ void Session::exec()
                 }
 #endif
             }
-#ifdef Q_OS_WIN32
-            // We can get a resize event after being minimized. Recreating the renderer at that time can cause
-            // us to start drawing on the screen even while our window is minimized. Minimizing on Windows also
-            // moves the window to -32000, -32000 which can cause a false window display index change. Avoid
-            // that whole mess by never recreating the decoder if we're minimized.
+            // Avoid recreating the decoder if we're minimized.
             else if (SDL_GetWindowFlags(m_Window) & SDL_WINDOW_MINIMIZED) {
                 break;
             }
-#endif
 
             if (m_FlushingWindowEventsRef > 0) {
                 // Ignore window events for renderer reset if flushing

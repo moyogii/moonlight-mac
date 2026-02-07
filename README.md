@@ -1,7 +1,9 @@
-# Moonlight Mac
+# Maclight QT
 
 ## Disclaimer
-This fork was created solely to learn more about PC streaming and the MacOS operating system to optimize it for my setup. Due to this, it has a bunch of experiental/in-progress features added that may or may not work for you. I recommend using the [official Moonlight client](https://github.com/moonlight-stream/moonlight-qt) for Mac as it's still being updated and will give you the most stable experience.
+Maclight-qt is a fork of the [official Moonlight client](https://github.com/moonlight-stream/moonlight-qt) solely to learn more about PC streaming and the MacOS operating system to optimize it for my specific needs. Due to this, it has a bunch of experimental/in-progress features that may or may not work for you. I *really* recommend supporting the original developers of Moonlight and their hard work as without them this fork would not be possible. 
+
+Occassionally this fork will pull in relevant changes from [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) and [moonlight-qt](https://github.com/moonlight-stream/moonlight-qt) to keep it as up to date as possible with the original app.
 
 ## Features
  - Hardware accelerated video decoding on Mac
@@ -84,15 +86,6 @@ bash scripts/generate-dmg.sh Release   # or Debug
 ```
 
 You can also open `moonlight-qt.pro` in Qt Creator instead of building from the command line.
-
-### Embedded Builds
-
-To create an embedded build for a single-purpose device:
-```bash
-qmake6 "CONFIG+=embedded" moonlight-qt.pro
-```
-* This build will lack windowed mode, Discord/Help links, and other features that don't make sense on an embedded device.
-* For platforms with poor GPU performance, add `"CONFIG+=gpuslow"` to prefer direct KMSDRM rendering over GL/Vulkan renderers.
 
 ## Contribute
 1. Fork it
