@@ -9,6 +9,8 @@ NavigableDialog {
     id: hotkeyCaptureDialog
 
     property string hotkeyName: ""
+    property int initialModifiers: 0
+    property int initialScanCode: 0
     property int capturedModifiers: 0
     property int capturedScanCode: 0
     property bool hasCapturedKey: false
@@ -18,9 +20,9 @@ NavigableDialog {
     standardButtons: Dialog.NoButton
 
     onOpened: {
-        capturedModifiers = 0
-        capturedScanCode = 0
-        hasCapturedKey = false
+        capturedModifiers = initialModifiers
+        capturedScanCode = initialScanCode
+        hasCapturedKey = capturedScanCode !== 0
         captureArea.forceActiveFocus()
     }
 

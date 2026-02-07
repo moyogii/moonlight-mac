@@ -1765,7 +1765,9 @@ Flickable {
                     ToolTip.timeout: 5000
                     ToolTip.visible: hovered
                     ToolTip.text: qsTr("Display real-time stream performance information while streaming.") + "\n\n" +
-                                  qsTr("You can toggle it at any time while streaming using Ctrl+Alt+Shift+S or Select+L1+R1+X.") + "\n\n" +
+                                  qsTr("You can toggle it at any time while streaming using %1 or Select+L1+R1+X.").arg(StreamingPreferences.hotkeyToString(
+                                                                                                                                StreamingPreferences.hotkeyToggleStatsModifiers,
+                                                                                                                                StreamingPreferences.hotkeyToggleStatsScanCode)) + "\n\n" +
                                   qsTr("The performance overlay is not supported on Steam Link or Raspberry Pi.")
                 }
 
@@ -1836,6 +1838,8 @@ Flickable {
                     Button {
                         text: qsTr("Change")
                         onClicked: {
+                            toggleStatsHotkeyCaptureDialog.initialModifiers = StreamingPreferences.hotkeyToggleStatsModifiers
+                            toggleStatsHotkeyCaptureDialog.initialScanCode = StreamingPreferences.hotkeyToggleStatsScanCode
                             toggleStatsHotkeyCaptureDialog.open()
                         }
                         anchors.verticalCenter: parent.verticalCenter
@@ -1865,6 +1869,8 @@ Flickable {
                     Button {
                         text: qsTr("Change")
                         onClicked: {
+                            exitStreamHotkeyCaptureDialog.initialModifiers = StreamingPreferences.hotkeyExitStreamModifiers
+                            exitStreamHotkeyCaptureDialog.initialScanCode = StreamingPreferences.hotkeyExitStreamScanCode
                             exitStreamHotkeyCaptureDialog.open()
                         }
                         anchors.verticalCenter: parent.verticalCenter
