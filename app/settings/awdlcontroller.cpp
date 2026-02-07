@@ -212,9 +212,16 @@ bool AwdlController::executePrivilegedIfconfigCommand(const QString &command)
     }
     argv.push_back(nullptr);
     
-    // @TODO: Replace with privledged helper in the future, AuthorizationExecuteWithPrivileges is deprecated but it still works.
+    // Use the legacy API for now until a privileged helper is introduced (SMJobBless).
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
     OSStatus status = AuthorizationExecuteWithPrivileges(
         m_authRef, tool, kAuthorizationFlagDefaults, argv.data(), nullptr);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     if (status == errAuthorizationSuccess) {
         qDebug() << "Successfully executed ifconfig command:" << command;
         return true;
