@@ -18,6 +18,7 @@ Occassionally this fork will pull in relevant changes from [moonlight-common-c](
  - Automatic enabling and disabling of AWDL (Apple Wireless Direct Link)
  - Game Mode support
  - Clipboard Sync (Requires [Apollo](https://github.com/ClassicOldSong/Apollo) or [Vibepollo](https://github.com/Nonary/Vibepollo))
+ - Programmable Hotkeys (Toggle Performance Overlay, Exit Stream)
  
 ## Downloads
 - [macOS](https://github.com/moyogii/moonlight-mac/releases)

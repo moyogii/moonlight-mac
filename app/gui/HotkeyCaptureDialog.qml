@@ -20,28 +20,34 @@ NavigableDialog {
     standardButtons: Dialog.NoButton
 
     onOpened: {
-        capturedModifiers = initialModifiers
-        capturedScanCode = initialScanCode
-        hasCapturedKey = capturedScanCode !== 0
-        captureArea.forceActiveFocus()
+        capturedModifiers = initialModifiers;
+        capturedScanCode = initialScanCode;
+        hasCapturedKey = capturedScanCode !== 0;
+        captureArea.forceActiveFocus();
     }
 
     // Convert Qt key modifiers to SDL KMOD bitmask
     function qtModifiersToSdl(qtMods) {
-        var sdlMods = 0
+        var sdlMods = 0;
         // On macOS, Qt swaps Ctrl and Meta:
         // Qt.ControlModifier = Cmd key (physical) = SDL KMOD_GUI
         // Qt.MetaModifier = Ctrl key (physical) = SDL KMOD_CTRL
         if (Qt.platform.os === "osx") {
-            if (qtMods & Qt.ControlModifier) sdlMods |= 0x0C00  // KMOD_GUI
-            if (qtMods & Qt.MetaModifier)    sdlMods |= 0x00C0  // KMOD_CTRL
+            if (qtMods & Qt.ControlModifier)
+                sdlMods |= 0x0C00;  // KMOD_GUI
+            if (qtMods & Qt.MetaModifier)
+                sdlMods |= 0x00C0;  // KMOD_CTRL
         } else {
-            if (qtMods & Qt.ControlModifier) sdlMods |= 0x00C0  // KMOD_CTRL
-            if (qtMods & Qt.MetaModifier)    sdlMods |= 0x0C00  // KMOD_GUI
+            if (qtMods & Qt.ControlModifier)
+                sdlMods |= 0x00C0;  // KMOD_CTRL
+            if (qtMods & Qt.MetaModifier)
+                sdlMods |= 0x0C00;  // KMOD_GUI
         }
-        if (qtMods & Qt.AltModifier)     sdlMods |= 0x0300  // KMOD_ALT
-        if (qtMods & Qt.ShiftModifier)   sdlMods |= 0x0003  // KMOD_SHIFT
-        return sdlMods
+        if (qtMods & Qt.AltModifier)
+            sdlMods |= 0x0300;  // KMOD_ALT
+        if (qtMods & Qt.ShiftModifier)
+            sdlMods |= 0x0003;  // KMOD_SHIFT
+        return sdlMods;
     }
 
     // Convert Qt key code to SDL scancode
@@ -49,61 +55,60 @@ NavigableDialog {
     function qtKeyToSdlScancode(qtKey) {
         // A-Z: Qt.Key_A=0x41..Qt.Key_Z=0x5A -> SDL_SCANCODE_A=4..SDL_SCANCODE_Z=29
         if (qtKey >= Qt.Key_A && qtKey <= Qt.Key_Z) {
-            return 4 + (qtKey - Qt.Key_A)
+            return 4 + (qtKey - Qt.Key_A);
         }
         // 0-9: Qt.Key_0=0x30..Qt.Key_9=0x39 -> SDL_SCANCODE_1=30..SDL_SCANCODE_9=38, SDL_SCANCODE_0=39
         if (qtKey >= Qt.Key_1 && qtKey <= Qt.Key_9) {
-            return 30 + (qtKey - Qt.Key_1)
+            return 30 + (qtKey - Qt.Key_1);
         }
         if (qtKey === Qt.Key_0) {
-            return 39
+            return 39;
         }
         // F1-F12: Qt.Key_F1=0x01000030..Qt.Key_F12=0x0100003B -> SDL_SCANCODE_F1=58..SDL_SCANCODE_F12=69
         if (qtKey >= Qt.Key_F1 && qtKey <= Qt.Key_F12) {
-            return 58 + (qtKey - Qt.Key_F1)
+            return 58 + (qtKey - Qt.Key_F1);
         }
 
         // Common punctuation keys (including shifted forms)
         if (qtKey === Qt.Key_Minus || qtKey === Qt.Key_Underscore) {
-            return 45  // SDL_SCANCODE_MINUS
+            return 45;  // SDL_SCANCODE_MINUS
         }
         if (qtKey === Qt.Key_Equal || qtKey === Qt.Key_Plus) {
-            return 46  // SDL_SCANCODE_EQUALS
+            return 46;  // SDL_SCANCODE_EQUALS
         }
         if (qtKey === Qt.Key_BracketLeft || qtKey === Qt.Key_BraceLeft) {
-            return 47  // SDL_SCANCODE_LEFTBRACKET
+            return 47;  // SDL_SCANCODE_LEFTBRACKET
         }
         if (qtKey === Qt.Key_BracketRight || qtKey === Qt.Key_BraceRight) {
-            return 48  // SDL_SCANCODE_RIGHTBRACKET
+            return 48;  // SDL_SCANCODE_RIGHTBRACKET
         }
         if (qtKey === Qt.Key_Backslash || qtKey === Qt.Key_Bar) {
-            return 49  // SDL_SCANCODE_BACKSLASH
+            return 49;  // SDL_SCANCODE_BACKSLASH
         }
         if (qtKey === Qt.Key_Semicolon || qtKey === Qt.Key_Colon) {
-            return 51  // SDL_SCANCODE_SEMICOLON
+            return 51;  // SDL_SCANCODE_SEMICOLON
         }
         if (qtKey === Qt.Key_Apostrophe || qtKey === Qt.Key_QuoteDbl) {
-            return 52  // SDL_SCANCODE_APOSTROPHE
+            return 52;  // SDL_SCANCODE_APOSTROPHE
         }
         if (qtKey === Qt.Key_QuoteLeft || qtKey === Qt.Key_AsciiTilde) {
-            return 53  // SDL_SCANCODE_GRAVE
+            return 53;  // SDL_SCANCODE_GRAVE
         }
         if (qtKey === Qt.Key_Comma || qtKey === Qt.Key_Less) {
-            return 54  // SDL_SCANCODE_COMMA
+            return 54;  // SDL_SCANCODE_COMMA
         }
         if (qtKey === Qt.Key_Period || qtKey === Qt.Key_Greater) {
-            return 55  // SDL_SCANCODE_PERIOD
+            return 55;  // SDL_SCANCODE_PERIOD
         }
         if (qtKey === Qt.Key_Slash || qtKey === Qt.Key_Question) {
-            return 56  // SDL_SCANCODE_SLASH
+            return 56;  // SDL_SCANCODE_SLASH
         }
 
-        return 0
+        return 0;
     }
 
     function isModifierKey(qtKey) {
-        return qtKey === Qt.Key_Control || qtKey === Qt.Key_Shift ||
-               qtKey === Qt.Key_Alt || qtKey === Qt.Key_Meta
+        return qtKey === Qt.Key_Control || qtKey === Qt.Key_Shift || qtKey === Qt.Key_Alt || qtKey === Qt.Key_Meta;
     }
 
     ColumnLayout {
@@ -117,7 +122,7 @@ NavigableDialog {
         }
 
         Label {
-            text: qsTr("Hold 0-4 modifiers (Ctrl, Alt, Shift, Cmd/Super) then press a key (A-Z, 0-9, F1-F12, or punctuation like [, ], \\, -, +).")
+            text: qsTr("Hold modifiers (Ctrl, Alt, Shift, Cmd/Super) then press a key (A-Z, 0-9, F1-F12, or punctuation like [, ], \\, -, +).")
             font.pointSize: 12
             wrapMode: Label.WordWrap
             Layout.maximumWidth: 350
@@ -137,43 +142,42 @@ NavigableDialog {
                 anchors.centerIn: parent
                 text: {
                     if (!hotkeyCaptureDialog.hasCapturedKey && hotkeyCaptureDialog.capturedModifiers === 0) {
-                        return qsTr("Waiting for input...")
+                        return qsTr("Waiting for input...");
                     }
-                    return StreamingPreferences.hotkeyToString(hotkeyCaptureDialog.capturedModifiers,
-                                                               hotkeyCaptureDialog.capturedScanCode)
+                    return StreamingPreferences.hotkeyToString(hotkeyCaptureDialog.capturedModifiers, hotkeyCaptureDialog.capturedScanCode);
                 }
                 font.pointSize: 14
                 color: hotkeyCaptureDialog.hasCapturedKey ? "white" : "#aaa"
             }
 
             Keys.onPressed: {
-                event.accepted = true
+                event.accepted = true;
 
                 if (hotkeyCaptureDialog.isModifierKey(event.key)) {
                     // Only update modifiers display while waiting for main key
                     if (!hotkeyCaptureDialog.hasCapturedKey) {
-                        hotkeyCaptureDialog.capturedModifiers = hotkeyCaptureDialog.qtModifiersToSdl(event.modifiers)
-                        hotkeyCaptureDialog.capturedScanCode = 0
+                        hotkeyCaptureDialog.capturedModifiers = hotkeyCaptureDialog.qtModifiersToSdl(event.modifiers);
+                        hotkeyCaptureDialog.capturedScanCode = 0;
                     }
-                    return
+                    return;
                 }
 
-                var scanCode = hotkeyCaptureDialog.qtKeyToSdlScancode(event.key)
+                var scanCode = hotkeyCaptureDialog.qtKeyToSdlScancode(event.key);
                 if (scanCode === 0) {
                     // Unsupported key, ignore silently
-                    return
+                    return;
                 }
 
-                hotkeyCaptureDialog.capturedModifiers = hotkeyCaptureDialog.qtModifiersToSdl(event.modifiers)
-                hotkeyCaptureDialog.capturedScanCode = scanCode
-                hotkeyCaptureDialog.hasCapturedKey = true
+                hotkeyCaptureDialog.capturedModifiers = hotkeyCaptureDialog.qtModifiersToSdl(event.modifiers);
+                hotkeyCaptureDialog.capturedScanCode = scanCode;
+                hotkeyCaptureDialog.hasCapturedKey = true;
             }
 
             Keys.onReleased: {
-                event.accepted = true
+                event.accepted = true;
                 // Update modifier display on release if no main key captured yet
                 if (!hotkeyCaptureDialog.hasCapturedKey) {
-                    hotkeyCaptureDialog.capturedModifiers = hotkeyCaptureDialog.qtModifiersToSdl(event.modifiers)
+                    hotkeyCaptureDialog.capturedModifiers = hotkeyCaptureDialog.qtModifiersToSdl(event.modifiers);
                 }
             }
         }
@@ -185,7 +189,7 @@ NavigableDialog {
             Button {
                 text: qsTr("Cancel")
                 onClicked: {
-                    hotkeyCaptureDialog.reject()
+                    hotkeyCaptureDialog.reject();
                 }
             }
 
@@ -193,10 +197,10 @@ NavigableDialog {
                 text: qsTr("Clear")
                 visible: hotkeyCaptureDialog.hasCapturedKey || hotkeyCaptureDialog.capturedModifiers !== 0
                 onClicked: {
-                    hotkeyCaptureDialog.capturedModifiers = 0
-                    hotkeyCaptureDialog.capturedScanCode = 0
-                    hotkeyCaptureDialog.hasCapturedKey = false
-                    captureArea.forceActiveFocus()
+                    hotkeyCaptureDialog.capturedModifiers = 0;
+                    hotkeyCaptureDialog.capturedScanCode = 0;
+                    hotkeyCaptureDialog.hasCapturedKey = false;
+                    captureArea.forceActiveFocus();
                 }
             }
 
@@ -204,9 +208,8 @@ NavigableDialog {
                 text: qsTr("Confirm")
                 enabled: hotkeyCaptureDialog.hasCapturedKey || (hotkeyCaptureDialog.capturedModifiers === 0 && hotkeyCaptureDialog.capturedScanCode === 0)
                 onClicked: {
-                    hotkeyCaptureDialog.hotkeyCaptured(hotkeyCaptureDialog.capturedModifiers,
-                                                       hotkeyCaptureDialog.capturedScanCode)
-                    hotkeyCaptureDialog.accept()
+                    hotkeyCaptureDialog.hotkeyCaptured(hotkeyCaptureDialog.capturedModifiers, hotkeyCaptureDialog.capturedScanCode);
+                    hotkeyCaptureDialog.accept();
                 }
             }
         }
