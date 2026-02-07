@@ -1,7 +1,7 @@
-# Maclight QT
+# Moonlight
 
 ## Disclaimer
-Maclight-qt is a fork of the [official Moonlight client](https://github.com/moonlight-stream/moonlight-qt) solely to learn more about PC streaming and the MacOS operating system to optimize it for my specific needs. Due to this, it has a bunch of experimental/in-progress features that may or may not work for you. I *really* recommend supporting the original developers of Moonlight and their hard work as without them this fork would not be possible. 
+Maclight-qt is a fork of the [official Moonlight client](https://github.com/moonlight-stream/moonlight-qt) solely to learn more about PC streaming and the MacOS operating system to optimize it for my specific needs. Due to this, it has a bunch of experimental/in-progress features that may or may not work for you. I *really* recommend using the official Mac client for a stable experience to support the original developers of Moonlight and their hard work as without them this fork would not be possible. 
 
 Occassionally this fork will pull in relevant changes from [moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c) and [moonlight-qt](https://github.com/moonlight-stream/moonlight-qt) to keep it as up to date as possible with the original app.
 
