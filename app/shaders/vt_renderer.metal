@@ -64,3 +64,17 @@ fragment half4 ps_draw_rgb(Vertex v [[ stage_in ]],
 {
     return rgbTexture.sample(s, v.texCoords);
 }
+
+fragment half4 ps_draw_overlay(Vertex v [[ stage_in ]],
+                               texture2d<half> rgbTexture [[ texture(0) ]],
+                               constant float &alpha [[ buffer(0) ]])
+{
+    half4 color = rgbTexture.sample(s, v.texCoords);
+    return half4(color.rgb, color.a * half(alpha));
+}
+
+fragment half4 ps_draw_solid(Vertex v [[ stage_in ]],
+                             constant float4 &color [[ buffer(0) ]])
+{
+    return half4(color);
+}

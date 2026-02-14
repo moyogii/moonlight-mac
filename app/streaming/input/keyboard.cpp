@@ -150,6 +150,22 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
         else
             m_CaptureSystemKeysMode = StreamingPreferences::CSK_OFF;
         updateKeyboardGrabState();
+
+        {
+            const char* modeText;
+            switch (m_CaptureSystemKeysMode) {
+            case StreamingPreferences::CSK_FULLSCREEN:
+                modeText = "System Keys: Fullscreen";
+                break;
+            case StreamingPreferences::CSK_ALWAYS:
+                modeText = "System Keys: Always";
+                break;
+            default:
+                modeText = "System Keys: Off";
+                break;
+            }
+            Session::get()->getOverlayManager().showToast(Overlay::ToastInfo, Overlay::ToastCategoryCaptureKeys, modeText);
+        }
         break;
 
     case KeyComboQuitAndExit:

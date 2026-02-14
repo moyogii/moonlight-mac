@@ -186,13 +186,13 @@ void Session::clConnectionStatusUpdate(int connectionStatus)
     switch (connectionStatus)
     {
     case CONN_STATUS_POOR:
-        s_ActiveSession->m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate,
-                                                            s_ActiveSession->m_StreamConfig.bitrate > 5000 ?
-                                                                "Slow connection to PC\nReduce your bitrate" : "Poor connection to PC");
-        s_ActiveSession->m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
+        s_ActiveSession->m_OverlayManager.showToast(
+            Overlay::ToastWarning,
+            Overlay::ToastCategoryConnectionStatus,
+            s_ActiveSession->m_StreamConfig.bitrate > 5000 ?
+                "Slow connection to PC\nReduce your bitrate" : "Poor connection to PC");
         break;
     case CONN_STATUS_OKAY:
-        s_ActiveSession->m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
         break;
     }
 }
@@ -1496,14 +1496,7 @@ void Session::notifyMouseEmulationMode(bool enabled)
     m_MouseEmulationRefCount += enabled ? 1 : -1;
     SDL_assert(m_MouseEmulationRefCount >= 0);
 
-    // We re-use the status update overlay for mouse mode notification
-    if (m_MouseEmulationRefCount > 0) {
-        m_OverlayManager.updateOverlayText(Overlay::OverlayStatusUpdate, "Gamepad mouse mode active\nLong press Start to deactivate");
-        m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, true);
-    }
-    else {
-        m_OverlayManager.setOverlayState(Overlay::OverlayStatusUpdate, false);
-    }
+    m_OverlayManager.setMouseModeOverlayActive(m_MouseEmulationRefCount > 0);
 }
 
 class AsyncConnectionStartThread : public QThread

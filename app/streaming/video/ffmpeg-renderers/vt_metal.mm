@@ -78,6 +78,7 @@ public:
           m_OverlayActive{},
           m_VideoPipelineState(nullptr),
           m_OverlayPipelineState(nullptr),
+          m_SolidPipelineState(nullptr),
           m_ShaderLibrary(nullptr),
           m_CommandQueue(nullptr),
           m_NextDrawable(nullptr),
@@ -157,6 +158,10 @@ public:
 
         if (m_OverlayPipelineState != nullptr) {
             [m_OverlayPipelineState release];
+        }
+
+        if (m_SolidPipelineState != nullptr) {
+            [m_SolidPipelineState release];
         }
 
         if (m_ShaderLibrary != nullptr) {
@@ -456,7 +461,7 @@ public:
 
             pipelineDesc = [[MTLRenderPipelineDescriptor new] autorelease];
             pipelineDesc.vertexFunction = [[m_ShaderLibrary newFunctionWithName:@"vs_draw"] autorelease];
-            pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:@"ps_draw_rgb"] autorelease];
+            pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:@"ps_draw_overlay"] autorelease];
             pipelineDesc.colorAttachments[0].pixelFormat = m_MetalLayer.pixelFormat;
             pipelineDesc.colorAttachments[0].blendingEnabled = YES;
             pipelineDesc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
@@ -470,6 +475,25 @@ public:
             if (!m_OverlayPipelineState) {
                 SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
                              "Failed to create overlay pipeline state");
+                return false;
+            }
+
+            pipelineDesc = [[MTLRenderPipelineDescriptor new] autorelease];
+            pipelineDesc.vertexFunction = [[m_ShaderLibrary newFunctionWithName:@"vs_draw"] autorelease];
+            pipelineDesc.fragmentFunction = [[m_ShaderLibrary newFunctionWithName:@"ps_draw_solid"] autorelease];
+            pipelineDesc.colorAttachments[0].pixelFormat = m_MetalLayer.pixelFormat;
+            pipelineDesc.colorAttachments[0].blendingEnabled = YES;
+            pipelineDesc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+            pipelineDesc.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+            pipelineDesc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            pipelineDesc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+            pipelineDesc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            pipelineDesc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+            [m_SolidPipelineState release];
+            m_SolidPipelineState = [m_MetalLayer.device newRenderPipelineStateWithDescriptor:pipelineDesc error:nullptr];
+            if (!m_SolidPipelineState) {
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                             "Failed to create solid pipeline state");
                 return false;
             }
 
@@ -652,12 +676,65 @@ public:
                 if (overlayTexture) {
                     SDL_FRect renderRect = {};
                     if (i == Overlay::OverlayStatusUpdate) {
-                        // Bottom Left
-                        renderRect.x = 0;
-                        renderRect.y = 0;
+                        constexpr float k_ToastPaddingX = 16.0f;
+                        constexpr float k_ToastPaddingY = 16.0f;
+                        constexpr float k_ToastInnerPadding = 12.0f;
+                        constexpr float k_AccentBarWidth = 4.0f;
+
+                        float toastAlpha = Session::get()->getOverlayManager().getToastOpacity();
+                        if (toastAlpha > 0.0f) {
+                            SDL_Color accentColor = Session::get()->getOverlayManager().getToastColor();
+                            float accentR = accentColor.r / 255.0f;
+                            float accentG = accentColor.g / 255.0f;
+                            float accentB = accentColor.b / 255.0f;
+
+                            float bgX = k_ToastPaddingX;
+                            float bgY = k_ToastPaddingY;
+                            float bgW = overlayTexture.width + (k_ToastInnerPadding * 2) + k_AccentBarWidth;
+                            float bgH = overlayTexture.height + (k_ToastInnerPadding * 2);
+
+                            SDL_FRect bgRect = {bgX, bgY, bgW, bgH};
+                            StreamUtils::screenSpaceToNormalizedDeviceCoords(&bgRect, m_LastDrawableWidth, m_LastDrawableHeight);
+
+                            Vertex bgVerts[] =
+                            {
+                                { { bgRect.x, bgRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
+                                { { bgRect.x, bgRect.y+bgRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
+                                { { bgRect.x+bgRect.w, bgRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
+                                { { bgRect.x+bgRect.w, bgRect.y+bgRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
+                            };
+
+                            float bgColor[4] = {0.0f, 0.0f, 0.0f, 0.7f * toastAlpha};
+                            [renderEncoder setRenderPipelineState:m_SolidPipelineState];
+                            [renderEncoder setFragmentBytes:bgColor length:sizeof(bgColor) atIndex:0];
+                            [renderEncoder setVertexBytes:bgVerts length:sizeof(bgVerts) atIndex:0];
+                            [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(bgVerts)];
+
+                            SDL_FRect accentRect = {bgX, bgY, k_AccentBarWidth, bgH};
+                            StreamUtils::screenSpaceToNormalizedDeviceCoords(&accentRect, m_LastDrawableWidth, m_LastDrawableHeight);
+
+                            Vertex accentVerts[] =
+                            {
+                                { { accentRect.x, accentRect.y, 0.0f, 1.0f }, { 0.0f, 1.0f } },
+                                { { accentRect.x, accentRect.y+accentRect.h, 0.0f, 1.0f }, { 0.0f, 0} },
+                                { { accentRect.x+accentRect.w, accentRect.y, 0.0f, 1.0f }, { 1.0f, 1.0f} },
+                                { { accentRect.x+accentRect.w, accentRect.y+accentRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
+                            };
+
+                            float accentColorF[4] = {accentR, accentG, accentB, toastAlpha};
+                            [renderEncoder setFragmentBytes:accentColorF length:sizeof(accentColorF) atIndex:0];
+                            [renderEncoder setVertexBytes:accentVerts length:sizeof(accentVerts) atIndex:0];
+                            [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(accentVerts)];
+
+                            renderRect.x = bgX + k_AccentBarWidth + k_ToastInnerPadding;
+                            renderRect.y = bgY + k_ToastInnerPadding;
+                        }
+                        else {
+                            renderRect.x = k_ToastPaddingX + k_AccentBarWidth + k_ToastInnerPadding;
+                            renderRect.y = k_ToastPaddingY + k_ToastInnerPadding;
+                        }
                     }
                     else if (i == Overlay::OverlayDebug) {
-                        // Top left
                         renderRect.x = 0;
                         renderRect.y = m_LastDrawableHeight - overlayTexture.height;
                     }
@@ -688,8 +765,11 @@ public:
                             { { backgroundRect.x+backgroundRect.w, backgroundRect.y+backgroundRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
                         };
 
+                        float debugAlpha = 1.0f;
+
                         [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
                         [renderEncoder setFragmentTexture:m_OverlayBackgroundTexture atIndex:0];
+                        [renderEncoder setFragmentBytes:&debugAlpha length:sizeof(debugAlpha) atIndex:0];
                         [renderEncoder setVertexBytes:bgVerts length:sizeof(bgVerts) atIndex:0];
                         [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(bgVerts)];
                     }
@@ -705,8 +785,12 @@ public:
                         { { renderRect.x+renderRect.w, renderRect.y+renderRect.h, 0.0f, 1.0f }, { 1.0f, 0} },
                     };
 
+                    float overlayAlpha = (i == Overlay::OverlayStatusUpdate) ?
+                        Session::get()->getOverlayManager().getToastOpacity() : 1.0f;
+
                     [renderEncoder setRenderPipelineState:m_OverlayPipelineState];
                     [renderEncoder setFragmentTexture:overlayTexture atIndex:0];
+                    [renderEncoder setFragmentBytes:&overlayAlpha length:sizeof(overlayAlpha) atIndex:0];
                     [renderEncoder setVertexBytes:verts length:sizeof(verts) atIndex:0];
                     [renderEncoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:SDL_arraysize(verts)];
 
@@ -1252,6 +1336,7 @@ private:
     SDL_atomic_t m_OverlayActive;
     id<MTLRenderPipelineState> m_VideoPipelineState;
     id<MTLRenderPipelineState> m_OverlayPipelineState;
+    id<MTLRenderPipelineState> m_SolidPipelineState;
     id<MTLLibrary> m_ShaderLibrary;
     id<MTLCommandQueue> m_CommandQueue;
 

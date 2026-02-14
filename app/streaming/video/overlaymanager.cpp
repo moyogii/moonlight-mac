@@ -3,22 +3,29 @@
 
 using namespace Overlay;
 
+#define TOAST_FADE_IN_MS    250
+#define TOAST_FADE_OUT_MS   500
+#define TOAST_DISPLAY_MS    2500
+
 OverlayManager::OverlayManager() :
     m_Renderer(nullptr),
-    m_FontData(Path::readDataFile("ModeSeven.ttf"))
+    m_FontData(Path::readDataFile("ModeSeven.ttf")),
+    m_ToastStartTime(0),
+    m_ToastDuration(0),
+    m_ToastType(ToastInfo),
+    m_ToastCategory(ToastCategoryNone),
+    m_ToastActive(false),
+    m_MouseModeOverlayActive(false)
 {
     memset(m_Overlays, 0, sizeof(m_Overlays));
 
     m_Overlays[OverlayType::OverlayDebug].color = {0xFF, 0xFF, 0xFF, 0xFF};
     m_Overlays[OverlayType::OverlayDebug].fontSize = 20;
 
-    m_Overlays[OverlayType::OverlayStatusUpdate].color = {0xCC, 0x00, 0x00, 0xFF};
-    m_Overlays[OverlayType::OverlayStatusUpdate].fontSize = 36;
+    m_Overlays[OverlayType::OverlayStatusUpdate].color = {0xFF, 0xFF, 0xFF, 0xFF};
+    m_Overlays[OverlayType::OverlayStatusUpdate].fontSize = 28;
 
-    // While TTF will usually not be initialized here, it is valid for that not to
-    // be the case, since Session destruction is deferred and could overlap with
-    // the lifetime of a new Session object.
-    //SDL_assert(TTF_WasInit() == 0);
+    m_MouseModeOverlayText[0] = '\0';
 
     if (TTF_Init() != 0) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
@@ -164,4 +171,108 @@ void OverlayManager::notifyOverlayUpdated(OverlayType type)
     if (oldSurface != nullptr) {
         SDL_FreeSurface(oldSurface);
     }
+}
+
+SDL_Color OverlayManager::getToastColor(ToastType type)
+{
+    switch (type) {
+    case ToastWarning:
+        return {0xFF, 0xD7, 0x00, 0xFF};
+    case ToastError:
+        return {0xFF, 0x45, 0x45, 0xFF};
+    case ToastInfo:
+    default:
+        return {0xFF, 0xFF, 0xFF, 0xFF};
+    }
+}
+
+void OverlayManager::showToast(ToastType type, ToastCategory category, const char* text)
+{
+    if (m_MouseModeOverlayActive) {
+        strncpy(m_MouseModeOverlayText, text, sizeof(m_MouseModeOverlayText) - 1);
+        m_MouseModeOverlayText[sizeof(m_MouseModeOverlayText) - 1] = '\0';
+        return;
+    }
+
+    if (m_ToastActive && m_ToastCategory == category) {
+        strncpy(m_Overlays[OverlayStatusUpdate].text, text, sizeof(m_Overlays[0].text) - 1);
+        m_Overlays[OverlayStatusUpdate].text[sizeof(m_Overlays[0].text) - 1] = '\0';
+        m_Overlays[OverlayStatusUpdate].color = getToastColor(type);
+        m_ToastType = type;
+        m_ToastStartTime = SDL_GetTicks();
+        m_Overlays[OverlayStatusUpdate].enabled = true;
+        notifyOverlayUpdated(OverlayStatusUpdate);
+        return;
+    }
+
+    strncpy(m_Overlays[OverlayStatusUpdate].text, text, sizeof(m_Overlays[0].text) - 1);
+    m_Overlays[OverlayStatusUpdate].text[sizeof(m_Overlays[0].text) - 1] = '\0';
+    m_Overlays[OverlayStatusUpdate].color = getToastColor(type);
+    m_Overlays[OverlayStatusUpdate].enabled = true;
+    m_ToastType = type;
+    m_ToastCategory = category;
+    m_ToastStartTime = SDL_GetTicks();
+    m_ToastDuration = TOAST_DISPLAY_MS;
+    m_ToastActive = true;
+
+    notifyOverlayUpdated(OverlayStatusUpdate);
+}
+
+float OverlayManager::getToastOpacity()
+{
+    if (!m_ToastActive) {
+        return 1.0f;
+    }
+
+    Uint32 elapsed = SDL_GetTicks() - m_ToastStartTime;
+
+    if (elapsed >= m_ToastDuration) {
+        m_ToastActive = false;
+        m_ToastCategory = ToastCategoryNone;
+        setOverlayState(OverlayStatusUpdate, false);
+
+        if (m_MouseModeOverlayActive && m_MouseModeOverlayText[0] != '\0') {
+            strncpy(m_Overlays[OverlayStatusUpdate].text, m_MouseModeOverlayText, sizeof(m_Overlays[0].text) - 1);
+            m_Overlays[OverlayStatusUpdate].text[sizeof(m_Overlays[0].text) - 1] = '\0';
+            m_Overlays[OverlayStatusUpdate].color = {0xCC, 0x00, 0x00, 0xFF};
+            m_Overlays[OverlayStatusUpdate].enabled = true;
+            notifyOverlayUpdated(OverlayStatusUpdate);
+        }
+        return 0.0f;
+    }
+
+    if (elapsed < TOAST_FADE_IN_MS) {
+        return (float)elapsed / TOAST_FADE_IN_MS;
+    }
+
+    if (elapsed > m_ToastDuration - TOAST_FADE_OUT_MS) {
+        Uint32 fadeElapsed = elapsed - (m_ToastDuration - TOAST_FADE_OUT_MS);
+        float opacity = 1.0f - ((float)fadeElapsed / TOAST_FADE_OUT_MS);
+        return opacity > 0.0f ? opacity : 0.0f;
+    }
+
+    return 1.0f;
+}
+
+SDL_Color OverlayManager::getToastColor()
+{
+    return getToastColor(m_ToastType);
+}
+
+Overlay::ToastType OverlayManager::getToastType()
+{
+    return m_ToastType;
+}
+
+void OverlayManager::setMouseModeOverlayActive(bool active)
+{
+    m_MouseModeOverlayActive = active;
+    if (!active) {
+        m_MouseModeOverlayText[0] = '\0';
+    }
+}
+
+bool OverlayManager::isMouseModeOverlayActive()
+{
+    return m_MouseModeOverlayActive;
 }

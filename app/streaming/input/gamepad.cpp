@@ -331,6 +331,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "Mouse emulation deactivated");
                     Session::get()->notifyMouseEmulationMode(false);
+                    Session::get()->getOverlayManager().showToast(Overlay::ToastInfo, Overlay::ToastCategoryGamepadMouse, "Mouse Mode: Off");
                 }
                 else if (m_GamepadMouse) {
                     // Send the start button up event to the host, since we won't do it below
@@ -340,6 +341,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
 
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "Mouse emulation active");
+                    Session::get()->getOverlayManager().showToast(Overlay::ToastInfo, Overlay::ToastCategoryGamepadMouse, "Mouse Mode: Active\nA=Left, B=Right");
                     Session::get()->notifyMouseEmulationMode(true);
                 }
             }
