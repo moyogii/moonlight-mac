@@ -142,13 +142,13 @@ void SdlInputHandler::performSpecialKeyCombo(KeyCombo combo)
     case KeyComboToggleCaptureSysKeys:
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected capture system keys toggle combo");
-        // Cycle: OFF → FULLSCREEN → ALWAYS → OFF
-        if (m_CaptureSystemKeysMode == StreamingPreferences::CSK_OFF)
-            m_CaptureSystemKeysMode = StreamingPreferences::CSK_FULLSCREEN;
-        else if (m_CaptureSystemKeysMode == StreamingPreferences::CSK_FULLSCREEN)
+        // Cycle: FULLSCREEN → ALWAYS → OFF → FULLSCREEN
+        if (m_CaptureSystemKeysMode == StreamingPreferences::CSK_FULLSCREEN)
             m_CaptureSystemKeysMode = StreamingPreferences::CSK_ALWAYS;
-        else
+        else if (m_CaptureSystemKeysMode == StreamingPreferences::CSK_ALWAYS)
             m_CaptureSystemKeysMode = StreamingPreferences::CSK_OFF;
+        else
+            m_CaptureSystemKeysMode = StreamingPreferences::CSK_FULLSCREEN;
         updateKeyboardGrabState();
 
         {

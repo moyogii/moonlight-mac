@@ -42,8 +42,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     // Allow gamepad input when the app doesn't have focus if requested
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, prefs.backgroundGamepad ? "1" : "0");
 
-#if !SDL_VERSION_ATLEAST(2, 0, 15)
-    // For older versions of SDL (2.0.14 and earlier), use SDL_HINT_GRAB_KEYBOARD
+#if !SDL_VERSION_ATLEAST(2, 0, 16)
+    // For older versions of SDL (2.0.15 and earlier), use SDL_HINT_GRAB_KEYBOARD
     SDL_SetHintWithPriority(SDL_HINT_GRAB_KEYBOARD,
                             m_CaptureSystemKeysMode != StreamingPreferences::CSK_OFF ? "1" : "0",
                             SDL_HINT_OVERRIDE);
@@ -360,10 +360,15 @@ void SdlInputHandler::updateKeyboardGrabState()
         }
     }
 
-#if SDL_VERSION_ATLEAST(2, 0, 15)
-    // On SDL 2.0.15+, we can get keyboard-only grab.
+#if SDL_VERSION_ATLEAST(2, 0, 16)
+    SDL_SetWindowKeyboardGrab(m_Window, shouldGrab ? SDL_TRUE : SDL_FALSE);
+#elif SDL_VERSION_ATLEAST(2, 0, 15)
     SDL_SetWindowKeyboardGrab(m_Window, shouldGrab ? SDL_TRUE : SDL_FALSE);
 #endif
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                "Keyboard grab state: requested=%s, mode=%s",
+                shouldGrab ? "true" : "false",
+                getCaptureSystemKeysModeString().toUtf8().constData());
 }
 
 bool SdlInputHandler::isSystemKeyCaptureActive()
@@ -378,7 +383,7 @@ bool SdlInputHandler::isSystemKeyCaptureActive()
 
     Uint32 windowFlags = SDL_GetWindowFlags(m_Window);
     if (!(windowFlags & SDL_WINDOW_INPUT_FOCUS)
-#if SDL_VERSION_ATLEAST(2, 0, 15)
+#if SDL_VERSION_ATLEAST(2, 0, 16)
             || !(windowFlags & SDL_WINDOW_KEYBOARD_GRABBED)
 #else
             || !(windowFlags & SDL_WINDOW_INPUT_GRABBED)
